@@ -1,12 +1,11 @@
 import { createHash } from "node:crypto";
-import { readFile } from "node:fs/promises";
-import { basename, isAbsolute } from "node:path";
 
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 
 import type { AppStoreConnectClient, UploadOperation } from "../client/asc.js";
 import { summarizeResponse } from "../client/shape.js";
+import { attributesOf, idOf, isRecord, pollAssetState, readImage } from "./assets.js";
 import { compact, confirmArg, limitArg, wrap } from "./util.js";
 
 /**
@@ -50,13 +49,6 @@ const SCREENSHOT_DISPLAY_TYPES = [
   "IMESSAGE_APP_IPAD_97",
 ] as const;
 
-/** Apple rejects anything larger well before processing; fail before reserving. */
-const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
-
-const POLL_INTERVALS_MS = [1000, 2000, 2000, 3000, 5000];
-
-const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
-
 const localizationIdArg = z
   .string()
   .min(1)
@@ -82,21 +74,6 @@ const displayTypeArg = z
       "APP_DESKTOP is macOS.",
   );
 
-type Rec = Record<string, unknown>;
-
-const isRecord = (value: unknown): value is Rec =>
-  typeof value === "object" && value !== null && !Array.isArray(value);
-
-const attributesOf = (response: unknown): Rec => {
-  if (!isRecord(response) || !isRecord(response.data)) return {};
-  return isRecord(response.data.attributes) ? response.data.attributes : {};
-};
-
-const idOf = (response: unknown): string | undefined => {
-  if (!isRecord(response) || !isRecord(response.data)) return undefined;
-  return typeof response.data.id === "string" ? response.data.id : undefined;
-};
-
 /**
  * `uploadOperations` is a plain attribute, so the generic summarizer would echo
  * a wall of long pre-signed URLs back into the model's context. They are spent
@@ -111,62 +88,6 @@ const stripUploadOperations = (summarized: unknown): unknown => {
   };
   const { data } = summarized;
   return { ...summarized, data: Array.isArray(data) ? data.map(strip) : strip(data) };
-};
-
-/**
- * Resolve the image bytes from either a server-side path or inline base64.
- * `filePath` is the realistic input — a model cannot emit a PNG — but this
- * server also ships as a Docker image, where the host paths a caller would
- * naturally reach for do not resolve inside the container.
- */
-const readImage = async (
-  filePath: string | undefined,
-  fileData: string | undefined,
-  fileName: string | undefined,
-): Promise<{ bytes: Buffer; name: string }> => {
-  if ((filePath === undefined) === (fileData === undefined)) {
-    throw new Error(
-      "Pass exactly one of `filePath` (a path readable by this server) or `fileData` (base64).",
-    );
-  }
-
-  const resolved = await (async (): Promise<{ bytes: Buffer; name: string }> => {
-    if (fileData !== undefined) {
-      if (!fileName) throw new Error("`fileName` is required when passing `fileData`.");
-      return { bytes: Buffer.from(fileData, "base64"), name: fileName };
-    }
-
-    const path = filePath as string;
-    if (!isAbsolute(path)) {
-      throw new Error(
-        `\`filePath\` must be an absolute path (got "${path}") — this server's working ` +
-          `directory is not necessarily yours.`,
-      );
-    }
-    try {
-      return { bytes: await readFile(path), name: fileName ?? basename(path) };
-    } catch (err) {
-      const code = (err as NodeJS.ErrnoException).code;
-      throw new Error(
-        `Could not read the screenshot at ${path} (${code ?? "unknown error"}). If this MCP ` +
-          `server runs in Docker the path must exist INSIDE the container — mount the folder ` +
-          `(docker run -v /host/screenshots:/screenshots …) and pass the container path, or ` +
-          `send the image as base64 via \`fileData\` instead.`,
-        { cause: err },
-      );
-    }
-  })();
-
-  if (resolved.bytes.byteLength === 0) {
-    throw new Error(`The screenshot is empty (0 bytes): ${filePath ?? resolved.name}.`);
-  }
-  if (resolved.bytes.byteLength > MAX_IMAGE_BYTES) {
-    throw new Error(
-      `The screenshot is ${resolved.bytes.byteLength} bytes, over the ${MAX_IMAGE_BYTES}-byte ` +
-        `limit. Export it at the exact required dimensions rather than oversampling.`,
-    );
-  }
-  return resolved;
 };
 
 /** Find the existing set for a display type, so uploads don't need a lookup first. */
@@ -208,81 +129,6 @@ const createScreenshotSet = async (
   const id = idOf(res);
   if (!id) throw new Error(`Creating the ${displayType} screenshot set returned no id.`);
   return id;
-};
-
-type UploadMeta = {
-  screenshotSetId: string;
-  screenshotSetCreated: boolean;
-  displayType: string;
-  fileName: string;
-  fileSize: number;
-  parts: number;
-};
-
-const describeStateErrors = (state: Rec): string =>
-  (Array.isArray(state.errors) ? state.errors : [])
-    .map((e) => (isRecord(e) ? [e.code, e.description].filter(Boolean).join(": ") : String(e)))
-    .filter(Boolean)
-    .join("; ");
-
-/**
- * Apple validates the image (dimensions, alpha channel) asynchronously, after
- * the bytes are committed — so this is where a wrongly-sized screenshot fails.
- */
-const pollAssetState = async (
-  client: AppStoreConnectClient,
-  screenshotId: string,
-  waitSeconds: number,
-  meta: UploadMeta,
-): Promise<unknown> => {
-  const deadline = Date.now() + waitSeconds * 1000;
-  let tick = 0;
-
-  for (;;) {
-    const attrs = attributesOf(await client.get(`/v1/appScreenshots/${screenshotId}`));
-    const assetState = isRecord(attrs.assetDeliveryState) ? attrs.assetDeliveryState : {};
-    const state = typeof assetState.state === "string" ? assetState.state : undefined;
-
-    if (state === "COMPLETE") {
-      return {
-        id: screenshotId,
-        state,
-        ...meta,
-        ...(attrs.imageAsset !== undefined ? { imageAsset: attrs.imageAsset } : {}),
-        ...(Array.isArray(assetState.warnings) && assetState.warnings.length > 0
-          ? { warnings: assetState.warnings }
-          : {}),
-      };
-    }
-
-    if (state === "FAILED") {
-      const why = describeStateErrors(assetState);
-      throw new Error(
-        `App Store Connect rejected the screenshot during processing${why ? `: ${why}` : ""}. ` +
-          `This is almost always the wrong pixel dimensions, or an alpha channel, for ` +
-          `${meta.displayType}. The failed asset ${screenshotId} still exists — delete it with ` +
-          `app_store_connect_delete_screenshot before retrying.`,
-      );
-    }
-
-    if (Date.now() >= deadline) {
-      // The bytes are committed by now, so this is NOT a failure. Throwing here
-      // would read as "upload failed", prompting a retry that duplicates the
-      // screenshot in the set.
-      return {
-        id: screenshotId,
-        state: state ?? "UNKNOWN",
-        stillProcessing: true,
-        ...meta,
-        note:
-          `Still processing after ${waitSeconds}s. The upload itself succeeded — poll ` +
-          `app_store_connect_get_screenshot for the final state.`,
-      };
-    }
-
-    await sleep(POLL_INTERVALS_MS[Math.min(tick, POLL_INTERVALS_MS.length - 1)] as number);
-    tick += 1;
-  }
 };
 
 type UploadArgs = {
@@ -348,13 +194,23 @@ const uploadScreenshot = async (
   }
 
   // 5. Wait for Apple's asynchronous validation to land.
-  return pollAssetState(client, screenshotId, args.waitSeconds, {
-    screenshotSetId,
-    screenshotSetCreated: existingSetId === undefined,
-    displayType: args.displayType,
-    fileName: name,
-    fileSize: bytes.byteLength,
-    parts: operations.length,
+  return pollAssetState(client, {
+    resourcePath: "/v1/appScreenshots",
+    assetId: screenshotId,
+    waitSeconds: args.waitSeconds,
+    meta: {
+      screenshotSetId,
+      screenshotSetCreated: existingSetId === undefined,
+      displayType: args.displayType,
+      fileName: name,
+      fileSize: bytes.byteLength,
+      parts: operations.length,
+    },
+    failureHint:
+      `This is almost always the wrong pixel dimensions, or an alpha channel, for ` +
+      `${args.displayType}.`,
+    deleteToolName: "app_store_connect_delete_screenshot",
+    pollToolName: "app_store_connect_get_screenshot",
   });
 };
 
