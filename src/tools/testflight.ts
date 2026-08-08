@@ -3,7 +3,7 @@ import { z } from "zod";
 
 import type { AppStoreConnectClient } from "../client/asc.js";
 import { summarizeResponse } from "../client/shape.js";
-import { appIdArg, compact, confirmArg, limitArg, wrap } from "./util.js";
+import { appIdArg, compact, confirmArg, limitArg, PreconditionError, wrap } from "./util.js";
 
 const groupIdArg = z
   .string()
@@ -81,6 +81,99 @@ export const registerTestflightTools = (
   );
 
   if (!allowWrites) return;
+
+  server.registerTool(
+    "app_store_connect_create_beta_group",
+    {
+      description:
+        "Create a TestFlight beta group for an app — the container builds are distributed " +
+        "through. An app with no group has nowhere to send a build, so this is the first step " +
+        "of setting up TestFlight; every other beta tool needs the group id it returns. " +
+        "Internal groups take testers who are already Users on the App Store Connect account " +
+        "(up to 100) and receive builds without Beta App Review, which makes " +
+        "`hasAccessToAllBuilds` the quickest way to make existing builds installable. External " +
+        "groups take anyone by email, and their first build needs review.",
+      inputSchema: {
+        appId: appIdArg,
+        name: z
+          .string()
+          .min(1)
+          .describe('Group name, unique within the app, e.g. "Internal" or "Public Beta".'),
+        isInternalGroup: z
+          .boolean()
+          .default(true)
+          .describe(
+            "True for an internal group (testers must be account Users; no Beta App Review). " +
+              "False for an external group.",
+          ),
+        hasAccessToAllBuilds: z
+          .boolean()
+          .optional()
+          .describe(
+            "Internal groups only. Give the group every build automatically, including ones " +
+              "already uploaded, instead of assigning builds one at a time.",
+          ),
+        publicLinkEnabled: z
+          .boolean()
+          .optional()
+          .describe("External groups only. Enable a public TestFlight invite link."),
+        publicLinkLimit: z
+          .number()
+          .int()
+          .min(1)
+          .optional()
+          .describe("External groups only. Cap how many testers the public link admits."),
+        feedbackEnabled: z
+          .boolean()
+          .optional()
+          .describe("Let testers send feedback and screenshots from the TestFlight app."),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false },
+    },
+    async ({
+      appId,
+      name,
+      isInternalGroup,
+      hasAccessToAllBuilds,
+      publicLinkEnabled,
+      publicLinkLimit,
+      feedbackEnabled,
+    }) =>
+      wrap(async () => {
+        // Apple rejects the cross-kind attributes outright, and its error names the
+        // field rather than the reason. Fail here instead, where we can say which
+        // way the group is wrong.
+        if (isInternalGroup && (publicLinkEnabled !== undefined || publicLinkLimit !== undefined)) {
+          throw new PreconditionError("Public links are only available on external beta groups.", {
+            isInternalGroup,
+            publicLinkEnabled,
+            publicLinkLimit,
+          });
+        }
+        if (!isInternalGroup && hasAccessToAllBuilds !== undefined) {
+          throw new PreconditionError(
+            "hasAccessToAllBuilds is only available on internal beta groups.",
+            { isInternalGroup, hasAccessToAllBuilds },
+          );
+        }
+        return summarizeResponse(
+          await client.post("/v1/betaGroups", {
+            data: {
+              type: "betaGroups",
+              attributes: compact({
+                name,
+                isInternalGroup,
+                hasAccessToAllBuilds,
+                publicLinkEnabled,
+                publicLinkLimit,
+                feedbackEnabled,
+              }),
+              relationships: { app: { data: { type: "apps", id: appId } } },
+            },
+          }),
+        );
+      }),
+  );
 
   server.registerTool(
     "app_store_connect_invite_beta_tester",

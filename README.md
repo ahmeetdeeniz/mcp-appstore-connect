@@ -215,7 +215,7 @@ npx @modelcontextprotocol/inspector npx -y @mgcrea/mcp-appstore-connect
 
 **Builds** — `list_builds`
 
-**TestFlight** — `list_beta_groups`, `list_beta_testers`, `list_beta_feedback`, _`invite_beta_tester`_\*, _`add_tester_to_group`_\*, _`remove_tester_from_group`_\*†
+**TestFlight** — `list_beta_groups`, `list_beta_testers`, `list_beta_feedback`, _`create_beta_group`_\*, _`invite_beta_tester`_\*, _`add_tester_to_group`_\*, _`remove_tester_from_group`_\*† — an app with no group has nowhere to send a build, so `create_beta_group` is the first step of setting TestFlight up; every other tool here needs the group id it returns. Internal groups take testers who are already Users on the account and skip Beta App Review, so `hasAccessToAllBuilds` is the quickest way to make builds you have already uploaded installable.
 
 **Reports & analytics** — `download_sales_report`, `download_finance_report`, `list_analytics_reports`, _`create_analytics_report_request`_\*
 
