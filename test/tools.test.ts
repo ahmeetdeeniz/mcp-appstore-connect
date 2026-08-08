@@ -92,6 +92,9 @@ describe("tool registration", () => {
       "app_store_connect_list_users",
       "app_store_connect_list_bundle_ids",
       "app_store_connect_list_devices",
+      "app_store_connect_list_iap_localizations",
+      "app_store_connect_get_iap_review_screenshot",
+      "app_store_connect_get_iap_availability",
     ]) {
       expect(readOnly, name).toContain(name);
       expect(withWrites, name).toContain(name);
@@ -120,6 +123,13 @@ describe("tool registration", () => {
       "app_store_connect_invite_beta_tester",
       "app_store_connect_remove_tester_from_group",
       "app_store_connect_set_in_app_purchase_price",
+      "app_store_connect_update_in_app_purchase",
+      "app_store_connect_set_iap_availability",
+      "app_store_connect_create_iap_localization",
+      "app_store_connect_update_iap_localization",
+      "app_store_connect_delete_iap_localization",
+      "app_store_connect_upload_iap_review_screenshot",
+      "app_store_connect_submit_in_app_purchase_for_review",
       "app_store_connect_create_bundle_id",
       "app_store_connect_enable_capability",
       "app_store_connect_disable_capability",
@@ -1165,5 +1175,255 @@ describe("reports require a vendor number", () => {
     const text = (result.content as { text: string }[])[0]?.text ?? "";
     expect(text).toContain("vendor number");
     expect(fetchImpl).not.toHaveBeenCalled();
+  });
+});
+
+describe("in-app purchase metadata", () => {
+  const IAP_ID = "6f4d2c1a-0000-4000-8000-000000000001";
+  const LOC_ID = "1a2b3c4d-0000-4000-8000-000000000002";
+
+  const callTool = async (
+    name: string,
+    args: Record<string, unknown>,
+    fetchImpl: ReturnType<typeof vi.fn>,
+  ): ReturnType<Client["callTool"]> => {
+    const client = await connect(
+      { ...baseConfig, allowWrites: true },
+      fetchImpl as unknown as typeof fetch,
+    );
+    return client.callTool({ name, arguments: args });
+  };
+
+  const okFetch = (body: unknown = { data: { id: LOC_ID, type: "inAppPurchaseLocalizations" } }) =>
+    vi.fn(async () => jsonResponse(body));
+
+  it("patches familySharable onto the v2 resource", async () => {
+    const fetchImpl = okFetch({ data: { id: IAP_ID, type: "inAppPurchases" } });
+
+    const result = await callTool(
+      "app_store_connect_update_in_app_purchase",
+      { inAppPurchaseId: IAP_ID, familySharable: true, confirm: true },
+      fetchImpl,
+    );
+
+    expect(result.isError).toBeFalsy();
+    const patch = patchCall(fetchImpl);
+    expect(new URL(String(patch?.[0])).pathname).toBe(`/v2/inAppPurchases/${IAP_ID}`);
+    const body = JSON.parse(String(patch?.[1].body));
+    expect(body.data.type).toBe("inAppPurchases");
+    expect(body.data.attributes).toEqual({ familySharable: true });
+    // `confirm` is a gate, not an attribute — sending it would 409.
+    expect(body.data.attributes.confirm).toBeUndefined();
+  });
+
+  it("creates a localization through the inAppPurchaseV2 relationship", async () => {
+    const fetchImpl = okFetch();
+
+    const result = await callTool(
+      "app_store_connect_create_iap_localization",
+      {
+        inAppPurchaseId: IAP_ID,
+        locale: "en-US",
+        name: "Cadence Pro",
+        description: "Every engine, batch queue and export.",
+        confirm: true,
+      },
+      fetchImpl,
+    );
+
+    expect(result.isError).toBeFalsy();
+    const body = JSON.parse(
+      String(postCall(fetchImpl, "/v1/inAppPurchaseLocalizations")?.[1].body),
+    );
+    expect(body.data.type).toBe("inAppPurchaseLocalizations");
+    expect(body.data.attributes).toEqual({
+      name: "Cadence Pro",
+      locale: "en-US",
+      description: "Every engine, batch queue and export.",
+    });
+    // The relationship key is `inAppPurchaseV2`; `inAppPurchase` is rejected.
+    expect(body.data.relationships.inAppPurchaseV2.data).toEqual({
+      type: "inAppPurchases",
+      id: IAP_ID,
+    });
+  });
+
+  it("refuses an over-length name before calling Apple", async () => {
+    const fetchImpl = okFetch();
+
+    const result = await callTool(
+      "app_store_connect_create_iap_localization",
+      { inAppPurchaseId: IAP_ID, locale: "en-US", name: "x".repeat(31), confirm: true },
+      fetchImpl,
+    );
+
+    expect(result.isError).toBe(true);
+    expect((result.content as { text: string }[])[0]?.text ?? "").toContain("30-character");
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("refuses an over-length description before calling Apple", async () => {
+    const fetchImpl = okFetch();
+
+    const result = await callTool(
+      "app_store_connect_update_iap_localization",
+      { localizationId: LOC_ID, description: "y".repeat(46), confirm: true },
+      fetchImpl,
+    );
+
+    expect(result.isError).toBe(true);
+    expect((result.content as { text: string }[])[0]?.text ?? "").toContain("45-character");
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("refuses to submit an IAP that is still MISSING_METADATA", async () => {
+    const fetchImpl = vi.fn(async () =>
+      jsonResponse({
+        data: { id: IAP_ID, type: "inAppPurchases", attributes: { state: "MISSING_METADATA" } },
+      }),
+    );
+
+    const result = await callTool(
+      "app_store_connect_submit_in_app_purchase_for_review",
+      { inAppPurchaseId: IAP_ID, confirm: true },
+      fetchImpl,
+    );
+
+    expect(result.isError).toBe(true);
+    expect((result.content as { text: string }[])[0]?.text ?? "").toContain("MISSING_METADATA");
+    expect(postCall(fetchImpl, "/v1/inAppPurchaseSubmissions")).toBeUndefined();
+  });
+
+  it("submits an IAP that is READY_TO_SUBMIT", async () => {
+    const fetchImpl = vi.fn(async (url: string, init?: RequestInit) => {
+      if (init?.method === "POST") {
+        return jsonResponse({ data: { id: "sub-1", type: "inAppPurchaseSubmissions" } });
+      }
+      return jsonResponse({
+        data: { id: IAP_ID, type: "inAppPurchases", attributes: { state: "READY_TO_SUBMIT" } },
+      });
+    });
+
+    const result = await callTool(
+      "app_store_connect_submit_in_app_purchase_for_review",
+      { inAppPurchaseId: IAP_ID, confirm: true },
+      fetchImpl,
+    );
+
+    expect(result.isError).toBeFalsy();
+    const body = JSON.parse(String(postCall(fetchImpl, "/v1/inAppPurchaseSubmissions")?.[1].body));
+    expect(body.data.relationships.inAppPurchaseV2.data.id).toBe(IAP_ID);
+  });
+});
+
+describe("in-app purchase availability", () => {
+  const IAP_ID = "6f4d2c1a-0000-4000-8000-000000000001";
+
+  const callTool = async (
+    name: string,
+    args: Record<string, unknown>,
+    fetchImpl: ReturnType<typeof vi.fn>,
+  ): ReturnType<Client["callTool"]> => {
+    const client = await connect(
+      { ...baseConfig, allowWrites: true },
+      fetchImpl as unknown as typeof fetch,
+    );
+    return client.callTool({ name, arguments: args });
+  };
+
+  it("reports data:null when availability has never been set", async () => {
+    const fetchImpl = vi.fn(async () => jsonResponse({ data: null }));
+
+    const result = await callTool(
+      "app_store_connect_get_iap_availability",
+      { inAppPurchaseId: IAP_ID },
+      fetchImpl,
+    );
+
+    expect(result.isError).toBeFalsy();
+    expect((result.content as { text: string }[])[0]?.text ?? "").toContain('"data": null');
+  });
+
+  it("resolves every territory when none are named", async () => {
+    const fetchImpl = vi.fn(async (url: string, init?: RequestInit) => {
+      if (init?.method === "POST") {
+        return jsonResponse({ data: { id: "avail-1", type: "inAppPurchaseAvailabilities" } });
+      }
+      return jsonResponse({
+        data: [
+          { id: "USA", type: "territories" },
+          { id: "FRA", type: "territories" },
+        ],
+      });
+    });
+
+    const result = await callTool(
+      "app_store_connect_set_iap_availability",
+      { inAppPurchaseId: IAP_ID, confirm: true },
+      fetchImpl,
+    );
+
+    expect(result.isError).toBeFalsy();
+    const body = JSON.parse(
+      String(postCall(fetchImpl, "/v1/inAppPurchaseAvailabilities")?.[1].body),
+    );
+    // This endpoint uses `inAppPurchase`, unlike the localization and submission
+    // endpoints which use `inAppPurchaseV2`.
+    expect(body.data.relationships.inAppPurchase.data).toEqual({
+      type: "inAppPurchases",
+      id: IAP_ID,
+    });
+    expect(body.data.relationships.availableTerritories.data).toEqual([
+      { type: "territories", id: "USA" },
+      { type: "territories", id: "FRA" },
+    ]);
+    expect(body.data.attributes.availableInNewTerritories).toBe(true);
+  });
+
+  it("reads a never-set availability 404 as 'not set', not an error", async () => {
+    // Apple 404s a to-one sub-resource that was never created, and names the
+    // PARENT's id in the message — raw, that reads as a broken request.
+    const fetchImpl = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            errors: [
+              {
+                status: "404",
+                code: "NOT_FOUND",
+                detail:
+                  "There is no resource of type 'inAppPurchaseAvailabilities' with id '" +
+                  IAP_ID +
+                  "'",
+              },
+            ],
+          }),
+          { status: 404, headers: { "content-type": "application/json" } },
+        ),
+    );
+
+    const result = await callTool(
+      "app_store_connect_get_iap_availability",
+      { inAppPurchaseId: IAP_ID },
+      fetchImpl,
+    );
+
+    expect(result.isError).toBeFalsy();
+    const text = (result.content as { text: string }[])[0]?.text ?? "";
+    expect(text).toContain("never been set");
+  });
+
+  it("refuses to make an IAP available nowhere", async () => {
+    const fetchImpl = vi.fn(async () => jsonResponse({ data: [] }));
+
+    const result = await callTool(
+      "app_store_connect_set_iap_availability",
+      { inAppPurchaseId: IAP_ID, confirm: true },
+      fetchImpl,
+    );
+
+    expect(result.isError).toBe(true);
+    expect((result.content as { text: string }[])[0]?.text ?? "").toContain("available nowhere");
+    expect(postCall(fetchImpl, "/v1/inAppPurchaseAvailabilities")).toBeUndefined();
   });
 });
