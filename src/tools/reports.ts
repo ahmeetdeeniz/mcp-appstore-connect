@@ -2,11 +2,29 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 
 import type { AppStoreConnectClient } from "../client/asc.js";
-import { summarizeResponse } from "../client/shape.js";
+import { attributesOf, resourcesOf, summarizeResponse } from "../client/shape.js";
 import type { ToolContext } from "./index.js";
-import { appIdArg, compact, limitArg, wrap } from "./util.js";
+import { appIdArg, compact, limitArg, PreconditionError, wrap } from "./util.js";
 
 const FREQUENCIES = ["DAILY", "WEEKLY", "MONTHLY", "YEARLY"] as const;
+
+/** Apple's analytics report categories, as accepted by `filter[category]`. */
+const REPORT_CATEGORIES = [
+  "APP_USAGE",
+  "APP_STORE_ENGAGEMENT",
+  "COMMERCE",
+  "FRAMEWORK_USAGE",
+  "PERFORMANCE",
+] as const;
+
+const GRANULARITIES = ["DAILY", "WEEKLY", "MONTHLY"] as const;
+
+/**
+ * A segment is one gzipped CSV of a report instance. Big apps produce big ones,
+ * and the whole file is decompressed in this process before being truncated, so
+ * the compressed size is checked against this before anything is fetched.
+ */
+const DEFAULT_MAX_SEGMENT_BYTES = 25 * 1024 * 1024;
 
 const SALES_REPORT_TYPES = [
   "SALES",
@@ -20,7 +38,7 @@ const SALES_REPORT_TYPES = [
 ] as const;
 
 /** Trim a downloaded TSV report so a huge one doesn't blow the context window. */
-const previewReport = (tsv: string, maxLines: number): unknown => {
+const previewReport = (tsv: string, maxLines: number): Record<string, unknown> => {
   const lines = tsv.split("\n");
   const truncated = lines.length > maxLines;
   return {
@@ -126,34 +144,240 @@ export const registerReportTools = (
   );
 
   server.registerTool(
-    "app_store_connect_list_analytics_reports",
+    "app_store_connect_list_analytics_report_requests",
     {
       description:
-        "List the analytics reports produced for an analytics report request. First create a " +
-        "request with app_store_connect_create_analytics_report_request (or reuse an existing " +
-        "request id), then list its reports and their download segments.",
+        "List an app's existing analytics report requests. Step 1 of reading analytics: a request " +
+        "is created once per app and then keeps producing reports, so list first and reuse the id " +
+        "rather than creating a second one (Apple rejects a duplicate ONGOING request). Then: " +
+        "list_analytics_reports -> list_analytics_report_instances -> " +
+        "download_analytics_report_segment.",
       inputSchema: {
-        reportRequestId: z
-          .string()
-          .min(1)
-          .describe("The analyticsReportRequest id whose reports to list."),
-        category: z
-          .string()
+        appId: appIdArg,
+        accessType: z
+          .enum(["ONE_TIME_SNAPSHOT", "ONGOING"])
           .optional()
-          .describe('Filter by report category, e.g. "APP_USAGE", "APP_STORE_ENGAGEMENT".'),
+          .describe("Filter by access type. Omit to list both."),
         limit: limitArg,
       },
       annotations: { readOnlyHint: true },
     },
-    async ({ reportRequestId, category, limit }) =>
+    async ({ appId, accessType, limit }) =>
+      wrap(async () =>
+        summarizeResponse(
+          await client.get(
+            `/v1/apps/${appId}/analyticsReportRequests`,
+            compact({ "filter[accessType]": accessType, limit }),
+          ),
+        ),
+      ),
+  );
+
+  server.registerTool(
+    "app_store_connect_list_analytics_reports",
+    {
+      description:
+        "List the reports produced for an analytics report request (step 2). Each report is a " +
+        "named dataset — installs and deletions, discovery and engagement, sales, retention — and " +
+        "carries no data itself: pass its id to app_store_connect_list_analytics_report_instances " +
+        "to reach the dated instances holding the numbers. An empty list means Apple has not " +
+        "finished generating them yet (allow a day or two after creating the request).",
+      inputSchema: {
+        reportRequestId: z
+          .string()
+          .min(1)
+          .describe(
+            "The analyticsReportRequest id, from app_store_connect_list_analytics_report_requests.",
+          ),
+        category: z
+          .enum(REPORT_CATEGORIES)
+          .optional()
+          .describe(
+            "Filter by category. APP_STORE_ENGAGEMENT covers impressions, product page views and " +
+              "conversion; APP_USAGE covers installs, sessions and retention; COMMERCE covers " +
+              "sales and proceeds.",
+          ),
+        name: z
+          .string()
+          .optional()
+          .describe('Filter by exact report name, e.g. "App Store Installation and Deletion".'),
+        limit: limitArg,
+      },
+      annotations: { readOnlyHint: true },
+    },
+    async ({ reportRequestId, category, name, limit }) =>
       wrap(async () =>
         summarizeResponse(
           await client.get(
             `/v1/analyticsReportRequests/${reportRequestId}/reports`,
-            compact({ "filter[category]": category, limit }),
+            compact({ "filter[category]": category, "filter[name]": name, limit }),
           ),
         ),
       ),
+  );
+
+  server.registerTool(
+    "app_store_connect_list_analytics_report_instances",
+    {
+      description:
+        "List the instances of an analytics report (step 3) — one per granularity and processing " +
+        "date. Pick the instance you want, then pass its id to " +
+        "app_store_connect_download_analytics_report_segment to get the actual rows. Filter by " +
+        "granularity first: a report usually has one instance per day, so an unfiltered list is " +
+        "mostly noise.",
+      inputSchema: {
+        reportId: z
+          .string()
+          .min(1)
+          .describe("The analyticsReport id, from app_store_connect_list_analytics_reports."),
+        granularity: z
+          .enum(GRANULARITIES)
+          .optional()
+          .describe("Filter by granularity. Not every report offers all three."),
+        processingDate: z
+          .string()
+          .optional()
+          .describe("Filter to one processing date, as YYYY-MM-DD."),
+        limit: limitArg,
+      },
+      annotations: { readOnlyHint: true },
+    },
+    async ({ reportId, granularity, processingDate, limit }) =>
+      wrap(async () =>
+        summarizeResponse(
+          await client.get(
+            `/v1/analyticsReports/${reportId}/instances`,
+            compact({
+              "filter[granularity]": granularity,
+              "filter[processingDate]": processingDate,
+              limit,
+            }),
+          ),
+        ),
+      ),
+  );
+
+  server.registerTool(
+    "app_store_connect_list_analytics_report_segments",
+    {
+      description:
+        "List the segments of an analytics report instance — the files the data is split across, " +
+        "with their compressed size and checksum. Use this to see how large a download will be; " +
+        "app_store_connect_download_analytics_report_segment fetches one. The `url` on a segment " +
+        "expires within minutes, so re-list rather than reusing an old one.",
+      inputSchema: {
+        instanceId: z
+          .string()
+          .min(1)
+          .describe(
+            "The analyticsReportInstance id, from " +
+              "app_store_connect_list_analytics_report_instances.",
+          ),
+        limit: limitArg,
+      },
+      annotations: { readOnlyHint: true },
+    },
+    async ({ instanceId, limit }) =>
+      wrap(async () =>
+        summarizeResponse(
+          await client.get(
+            `/v1/analyticsReportInstances/${instanceId}/segments`,
+            compact({ limit }),
+          ),
+        ),
+      ),
+  );
+
+  server.registerTool(
+    "app_store_connect_download_analytics_report_segment",
+    {
+      description:
+        "Download the actual analytics data for a report instance (step 4) and return it as text. " +
+        "This is the only tool that reaches the numbers — impressions, product page views, " +
+        "installs, deletions, sessions, retention, proceeds — depending on which report the " +
+        "instance belongs to. Resolves the instance's segments itself, so no expiring url has to " +
+        "be passed around. A report split across several segments needs one call per segmentIndex.",
+      inputSchema: {
+        instanceId: z
+          .string()
+          .min(1)
+          .describe(
+            "The analyticsReportInstance id, from " +
+              "app_store_connect_list_analytics_report_instances.",
+          ),
+        segmentIndex: z
+          .number()
+          .int()
+          .min(0)
+          .default(0)
+          .describe("Which segment to download, when the instance has more than one. 0-based."),
+        maxLines: z
+          .number()
+          .int()
+          .min(1)
+          .max(5000)
+          .default(500)
+          .describe("Truncate the returned rows to this many lines. Defaults to 500."),
+        maxBytes: z
+          .number()
+          .int()
+          .min(1)
+          .default(DEFAULT_MAX_SEGMENT_BYTES)
+          .describe(
+            "Refuse a segment whose compressed size exceeds this, before downloading it. " +
+              "Defaults to 25 MiB.",
+          ),
+      },
+      annotations: { readOnlyHint: true },
+    },
+    async ({ instanceId, segmentIndex, maxLines, maxBytes }) =>
+      wrap(async () => {
+        const response = await client.get(`/v1/analyticsReportInstances/${instanceId}/segments`);
+        const segments = resourcesOf(response);
+        if (segments.length === 0) {
+          throw new PreconditionError(
+            "This report instance has no segments. Apple is still generating it, or it holds no " +
+              "data for that date — pick another instance.",
+            { instanceId },
+          );
+        }
+
+        const segment = segments[segmentIndex];
+        if (!segment) {
+          throw new PreconditionError(
+            `Segment ${segmentIndex} does not exist — this instance has ${segments.length}.`,
+            { instanceId, segments: segments.length },
+          );
+        }
+
+        const attributes = attributesOf(segment);
+        const sizeInBytes = typeof attributes.sizeInBytes === "number" ? attributes.sizeInBytes : 0;
+        if (sizeInBytes > maxBytes) {
+          throw new PreconditionError(
+            `Segment ${segmentIndex} is ${sizeInBytes} bytes compressed, over the ${maxBytes} ` +
+              `byte limit. Raise maxBytes to fetch it anyway, or pick a narrower instance ` +
+              `(a DAILY granularity covers far less than MONTHLY).`,
+            { instanceId, segmentIndex, sizeInBytes, maxBytes },
+          );
+        }
+        if (typeof attributes.url !== "string" || attributes.url === "") {
+          throw new PreconditionError(`Segment ${segmentIndex} came back without a download url.`, {
+            instanceId,
+            segmentIndex,
+          });
+        }
+
+        const csv = await client.downloadSignedFile(attributes.url);
+        return {
+          segment: {
+            index: segmentIndex,
+            of: segments.length,
+            ...(typeof attributes.checksum === "string" ? { checksum: attributes.checksum } : {}),
+            sizeInBytes,
+          },
+          ...previewReport(csv, maxLines),
+        };
+      }),
   );
 
   if (!ctx.allowWrites) return;
@@ -162,8 +386,10 @@ export const registerReportTools = (
     "app_store_connect_create_analytics_report_request",
     {
       description:
-        "Request analytics reports for an app. Apple then generates the reports asynchronously; " +
-        "list them with app_store_connect_list_analytics_reports once ready. ONE_TIME_SNAPSHOT " +
+        "Request analytics reports for an app — the one-off setup step before any analytics can " +
+        "be read. Check app_store_connect_list_analytics_report_requests first: Apple rejects a " +
+        "second ONGOING request for the same app, and an existing one is reusable forever. Apple " +
+        "then generates reports asynchronously over the following day or two. ONE_TIME_SNAPSHOT " +
         "covers the last ~52 weeks; ONGOING keeps producing them.",
       inputSchema: {
         appId: appIdArg,

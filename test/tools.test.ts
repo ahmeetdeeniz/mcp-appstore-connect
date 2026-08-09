@@ -1,3 +1,5 @@
+import { gzipSync } from "node:zlib";
+
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { beforeAll, describe, expect, it, vi } from "vitest";
@@ -59,6 +61,14 @@ const postCall = (
       String(call[0]).includes(path) && (call[1] as RequestInit | undefined)?.method === "POST",
   ) as [string, RequestInit] | undefined;
 
+const textOf = (result: Awaited<ReturnType<Client["callTool"]>>): string =>
+  (result.content as { text: string }[])[0]?.text ?? "";
+
+/** A one-segment `/segments` listing, with the attributes the test cares about. */
+const segmentsBody = (attributes: Record<string, unknown>): unknown => ({
+  data: [{ id: "seg-1", type: "analyticsReportSegments", attributes }],
+});
+
 describe("tool registration", () => {
   let readOnly: string[];
   let withWrites: string[];
@@ -89,7 +99,11 @@ describe("tool registration", () => {
       "app_store_connect_list_beta_feedback",
       "app_store_connect_download_sales_report",
       "app_store_connect_download_finance_report",
+      "app_store_connect_list_analytics_report_requests",
       "app_store_connect_list_analytics_reports",
+      "app_store_connect_list_analytics_report_instances",
+      "app_store_connect_list_analytics_report_segments",
+      "app_store_connect_download_analytics_report_segment",
       "app_store_connect_list_users",
       "app_store_connect_list_bundle_ids",
       "app_store_connect_list_devices",
@@ -1260,6 +1274,171 @@ describe("reports require a vendor number", () => {
     const text = (result.content as { text: string }[])[0]?.text ?? "";
     expect(text).toContain("vendor number");
     expect(fetchImpl).not.toHaveBeenCalled();
+  });
+});
+
+describe("analytics reports", () => {
+  const APP_ID = "1234567890";
+  const REQUEST_ID = "req-0000-4000-8000-000000000001";
+  const REPORT_ID = "rep-0000-4000-8000-000000000002";
+  const INSTANCE_ID = "ins-0000-4000-8000-000000000003";
+  const SEGMENT_URL = "https://api-reports.itunes.apple.com/segments/abc?token=xyz";
+
+  const CSV = "Date\tTerritory\tInstallations\n2026-06-01\tUS\t1204\n2026-06-01\tFR\t311\n";
+
+  const callTool = async (
+    name: string,
+    args: Record<string, unknown>,
+    fetchImpl: ReturnType<typeof vi.fn>,
+  ): ReturnType<Client["callTool"]> => {
+    const client = await connect(baseConfig, fetchImpl as unknown as typeof fetch);
+    return client.callTool({ name, arguments: args });
+  };
+
+  it("lists an app's existing report requests so a duplicate is not created", async () => {
+    const fetchImpl = vi.fn(async () => jsonResponse({ data: [] }));
+
+    await callTool(
+      "app_store_connect_list_analytics_report_requests",
+      { appId: APP_ID, accessType: "ONGOING" },
+      fetchImpl,
+    );
+
+    const url = new URL(callArgs(fetchImpl)[0]);
+    expect(url.pathname).toBe(`/v1/apps/${APP_ID}/analyticsReportRequests`);
+    expect(url.searchParams.get("filter[accessType]")).toBe("ONGOING");
+  });
+
+  it("lists reports for a request with the category filter", async () => {
+    const fetchImpl = vi.fn(async () => jsonResponse({ data: [] }));
+
+    await callTool(
+      "app_store_connect_list_analytics_reports",
+      { reportRequestId: REQUEST_ID, category: "APP_STORE_ENGAGEMENT" },
+      fetchImpl,
+    );
+
+    const url = new URL(callArgs(fetchImpl)[0]);
+    expect(url.pathname).toBe(`/v1/analyticsReportRequests/${REQUEST_ID}/reports`);
+    expect(url.searchParams.get("filter[category]")).toBe("APP_STORE_ENGAGEMENT");
+  });
+
+  it("lists instances for a report with the granularity filter", async () => {
+    const fetchImpl = vi.fn(async () => jsonResponse({ data: [] }));
+
+    await callTool(
+      "app_store_connect_list_analytics_report_instances",
+      { reportId: REPORT_ID, granularity: "DAILY" },
+      fetchImpl,
+    );
+
+    const url = new URL(callArgs(fetchImpl)[0]);
+    expect(url.pathname).toBe(`/v1/analyticsReports/${REPORT_ID}/instances`);
+    expect(url.searchParams.get("filter[granularity]")).toBe("DAILY");
+  });
+
+  it("lists segments for an instance", async () => {
+    const fetchImpl = vi.fn(async () => jsonResponse({ data: [] }));
+
+    await callTool(
+      "app_store_connect_list_analytics_report_segments",
+      { instanceId: INSTANCE_ID },
+      fetchImpl,
+    );
+
+    expect(new URL(callArgs(fetchImpl)[0]).pathname).toBe(
+      `/v1/analyticsReportInstances/${INSTANCE_ID}/segments`,
+    );
+  });
+
+  /**
+   * The point of the whole chain: the segment's `url` is the only place the
+   * numbers live, and it is a short-lived signed URL off the API host, so the
+   * tool resolves it itself rather than making the caller carry it between calls.
+   */
+  it("resolves the segment and returns the decompressed rows", async () => {
+    const fetchImpl = vi.fn(async (url: string) =>
+      String(url).startsWith("https://api-reports.")
+        ? new Response(gzipSync(Buffer.from(CSV)), { status: 200 })
+        : jsonResponse(segmentsBody({ url: SEGMENT_URL, sizeInBytes: 512, checksum: "deadbeef" })),
+    );
+
+    const result = await callTool(
+      "app_store_connect_download_analytics_report_segment",
+      { instanceId: INSTANCE_ID },
+      fetchImpl as ReturnType<typeof vi.fn>,
+    );
+
+    expect(result.isError).toBeFalsy();
+    const body = JSON.parse(textOf(result));
+    expect(body.segment).toEqual({ index: 0, of: 1, checksum: "deadbeef", sizeInBytes: 512 });
+    expect(body.report).toBe(CSV);
+    expect(body.truncated).toBe(false);
+    expect(callArgs(fetchImpl as ReturnType<typeof vi.fn>, 1)[0]).toBe(SEGMENT_URL);
+  });
+
+  it("truncates a long segment to maxLines", async () => {
+    const long = `${Array.from({ length: 40 }, (_, i) => `2026-06-01\tUS\t${i}`).join("\n")}\n`;
+    const fetchImpl = vi.fn(async (url: string) =>
+      String(url).startsWith("https://api-reports.")
+        ? new Response(gzipSync(Buffer.from(long)), { status: 200 })
+        : jsonResponse(segmentsBody({ url: SEGMENT_URL, sizeInBytes: 512 })),
+    );
+
+    const result = await callTool(
+      "app_store_connect_download_analytics_report_segment",
+      { instanceId: INSTANCE_ID, maxLines: 5 },
+      fetchImpl as ReturnType<typeof vi.fn>,
+    );
+
+    const body = JSON.parse(textOf(result));
+    expect(body.truncated).toBe(true);
+    expect(body.report.split("\n")).toHaveLength(5);
+  });
+
+  it("refuses an oversized segment before downloading it", async () => {
+    const fetchImpl = vi.fn(async () =>
+      jsonResponse(segmentsBody({ url: SEGMENT_URL, sizeInBytes: 900_000_000 })),
+    );
+
+    const result = await callTool(
+      "app_store_connect_download_analytics_report_segment",
+      { instanceId: INSTANCE_ID },
+      fetchImpl,
+    );
+
+    expect(result.isError).toBe(true);
+    expect(textOf(result)).toContain("Raise maxBytes");
+    // Only the segments listing went out — the blob was never fetched.
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it("says an instance has no data rather than returning an empty report", async () => {
+    const fetchImpl = vi.fn(async () => jsonResponse({ data: [] }));
+
+    const result = await callTool(
+      "app_store_connect_download_analytics_report_segment",
+      { instanceId: INSTANCE_ID },
+      fetchImpl,
+    );
+
+    expect(result.isError).toBe(true);
+    expect(textOf(result)).toContain("no segments");
+  });
+
+  it("reports how many segments exist when the index is out of range", async () => {
+    const fetchImpl = vi.fn(async () =>
+      jsonResponse(segmentsBody({ url: SEGMENT_URL, sizeInBytes: 512 })),
+    );
+
+    const result = await callTool(
+      "app_store_connect_download_analytics_report_segment",
+      { instanceId: INSTANCE_ID, segmentIndex: 3 },
+      fetchImpl,
+    );
+
+    expect(result.isError).toBe(true);
+    expect(textOf(result)).toContain("this instance has 1");
   });
 });
 

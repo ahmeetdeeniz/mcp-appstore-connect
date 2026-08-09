@@ -72,7 +72,7 @@ Create a key in App Store Connect → **Users and Access → Integrations → Ke
 | `APP_STORE_CONNECT_ISSUER_ID`     | yes      | The Issuer ID (a UUID).                                        |
 | `APP_STORE_CONNECT_P8_PATH`       | one of   | Path to the `AuthKey_XXXX.p8` file.                            |
 | `APP_STORE_CONNECT_P8`            | one of   | Inline PEM contents (for Docker/CI); set this **or** the path. |
-| `APP_STORE_CONNECT_VENDOR_NUMBER` | reports  | Needed only by the sales/finance report tools.                 |
+| `APP_STORE_CONNECT_VENDOR_NUMBER` | reports  | Needed by the sales/finance reports only, not by analytics.    |
 | `APP_STORE_CONNECT_ALLOW_WRITES`  | no       | `1` to register the write tools. Off by default.               |
 | `APP_STORE_CONNECT_MAX_RETRIES`   | no       | Retry budget for 401/429/5xx. Defaults to 3.                   |
 | `APP_STORE_CONNECT_METADATA_ROOT` | no       | Where the listing tree lives. Defaults to `fastlane/metadata`. |
@@ -219,7 +219,9 @@ npx @modelcontextprotocol/inspector npx -y @mgcrea/mcp-appstore-connect
 
 **TestFlight** — `list_beta_groups`, `list_beta_testers`, `list_beta_feedback`, _`create_beta_group`_\*, _`invite_beta_tester`_\*, _`add_tester_to_group`_\*, _`remove_tester_from_group`_\*† — an app with no group has nowhere to send a build, so `create_beta_group` is the first step of setting TestFlight up; every other tool here needs the group id it returns. Internal groups take testers who are already Users on the account and skip Beta App Review, so `hasAccessToAllBuilds` is the quickest way to make builds you have already uploaded installable.
 
-**Reports & analytics** — `download_sales_report`, `download_finance_report`, `list_analytics_reports`, _`create_analytics_report_request`_\*
+**Sales & finance reports** — `download_sales_report`, `download_finance_report` — the Sales and Trends TSVs: units, proceeds, installs by territory and install type. Needs a vendor number.
+
+**Analytics** — `list_analytics_report_requests`, `list_analytics_reports`, `list_analytics_report_instances`, `list_analytics_report_segments`, `download_analytics_report_segment`, _`create_analytics_report_request`_\* — App Analytics proper: impressions, product page views, conversion rate, installs, deletions, sessions, retention. See [Reading analytics](#reading-analytics).
 
 **Users** — `list_users`
 
@@ -294,6 +296,48 @@ apply_listing  { files: [...], dryRun: false, confirm: true }
   you just want to read the listing. Nothing parses it back.
 - If the metadata tree already exists, diff before overwriting it.
 
+## Reading analytics
+
+App Analytics is not a single endpoint. Apple generates the reports asynchronously and
+files them behind four nested resources, so reaching an actual number is a walk:
+
+```
+analyticsReportRequest   one per app, created once, then reused forever
+  └─ report              a named dataset, e.g. "App Store Installation and Deletion"
+       └─ instance       one per granularity (DAILY/WEEKLY/MONTHLY) and processing date
+            └─ segment   the gzipped CSV that holds the rows
+```
+
+One tool per hop, in order:
+
+1. `create_analytics_report_request` — **once per app**, and only if there isn't one
+   already. Apple rejects a second `ONGOING` request, so run
+   `list_analytics_report_requests` first and reuse the id it returns. `ONE_TIME_SNAPSHOT`
+   backfills roughly the last 52 weeks; `ONGOING` keeps producing new instances.
+2. `list_analytics_reports` — filter by `category`: `APP_STORE_ENGAGEMENT` for impressions,
+   product page views and conversion rate; `APP_USAGE` for installs, deletions, sessions and
+   retention; `COMMERCE` for sales and proceeds.
+3. `list_analytics_report_instances` — filter by `granularity`, then pick a `processingDate`.
+   There is one instance per date, so an unfiltered list is mostly noise.
+4. `download_analytics_report_segment` — returns the rows as text, truncated to `maxLines`.
+
+Notes worth knowing before the first run:
+
+- **Nothing exists for a day or two after the request.** An empty report list is the
+  expected answer immediately after `create_analytics_report_request`, not a failure.
+- **The download resolves its own segment URL.** Those URLs are signed, off the API host,
+  and expire within minutes, so `download_analytics_report_segment` takes an `instanceId`
+  and re-lists the segments itself. Nothing has to carry a URL between calls.
+- **A big instance is refused, not streamed.** The segment is decompressed in the server
+  process, so anything over 25 MiB compressed fails with its size; raise `maxBytes` to
+  override, or pick a `DAILY` instance instead of `MONTHLY`.
+- **Segments are plural.** A large report splits across several; `list_analytics_report_segments`
+  shows how many, and `segmentIndex` selects one.
+
+This is a different pipeline from `download_sales_report` — that one is Sales and Trends,
+keyed by vendor number and date rather than by report request, and it is the better source
+for units and proceeds. Analytics is where the funnel metrics live.
+
 ## Release-prep plugin
 
 This repo doubles as a [Claude Code](https://claude.com/claude-code) plugin marketplace. The
@@ -324,7 +368,7 @@ missing, so it can gate a release from CI.
 
 - **Tokens are minted locally.** Each request carries a fresh-enough ES256 JWT (`aud: appstoreconnect-v1`), cached and re-signed shortly before Apple's 20-minute cap. The `.p8` never leaves your machine.
 - **Reports are TSV, not JSON.** `download_sales_report` / `download_finance_report` gunzip Apple's report and return the text (truncated to `maxLines`). Reports lag ~24–48h and are keyed by date/frequency.
-- **Analytics is asynchronous.** Create a report request, wait for Apple to generate it, then list its reports.
+- **Analytics is asynchronous and nested.** Create the report request once, wait a day or two for Apple to generate it, then walk request → report → instance → segment to reach the rows. See [Reading analytics](#reading-analytics).
 - **`upload_screenshot` reads the file server-side.** Pass an absolute `filePath` the server can reach. Under Docker that means a path _inside_ the container — mount the folder (`-v /host/screenshots:/screenshots`) and pass the container path, or send small images inline as base64 via `fileData`.
 - **Screenshots validate after upload.** Apple checks pixel dimensions asynchronously, so a wrongly-sized image fails during processing rather than at upload; the tool waits (`waitSeconds`, default 60) and reports Apple's exact reason. Timing out is not a failure — the upload already succeeded, so poll `get_screenshot` instead of retrying. The version must be editable (`PREPARE_FOR_SUBMISSION` or `DEVELOPER_REJECTED`), and a set holds at most 10 screenshots.
 - **Screenshot order is explicit.** `reorder_screenshots` replaces a set's full contents, so pass every id you want to keep — an omitted one is removed from the set.

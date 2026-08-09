@@ -100,6 +100,16 @@ const withRetry = async (
   }
 };
 
+/**
+ * Analytics report segments are served from a blob store rather than the API
+ * host, so `relativize()`'s same-origin rule cannot gate them — but the URL
+ * still arrives off the wire, so pin it to Apple before fetching rather than
+ * following wherever a response happens to point.
+ */
+const APPLE_DOWNLOAD_HOST = /(^|\.)apple\.com$/;
+
+const isGzip = (buf: Buffer): boolean => buf.length > 2 && buf[0] === 0x1f && buf[1] === 0x8b;
+
 /** One leg of an asset upload, as handed back in an `uploadOperations` attribute. */
 export type UploadOperation = {
   method?: string;
@@ -270,6 +280,54 @@ export class AppStoreConnectClient {
       });
     }
     return gunzipSync(buf).toString("utf8");
+  }
+
+  /**
+   * Fetch one of Apple's pre-signed download URLs — the `url` on an analytics
+   * report segment — and return its text. Like `uploadAsset`, these URLs carry
+   * their own signature and do not live on the API host, so this deliberately
+   * skips `baseUrl` and the `Authorization` header; sending the JWT to the blob
+   * store gets the request rejected. A 401/403 means the URL expired, which
+   * reminting the token cannot fix, so it is not retried.
+   *
+   * Segments arrive gzipped, but nothing in the response says so reliably, so
+   * the magic bytes decide — an uncompressed body is returned as-is rather than
+   * failing inside gunzip.
+   */
+  async downloadSignedFile(url: string): Promise<string> {
+    let parsed: URL;
+    try {
+      parsed = new URL(url);
+    } catch {
+      throw new Error(`Not a valid download URL: ${url}`);
+    }
+    if (parsed.protocol !== "https:" || !APPLE_DOWNLOAD_HOST.test(parsed.hostname)) {
+      throw new Error(
+        `Refusing to download from ${parsed.host} — signed report URLs must be https on an ` +
+          `apple.com host. Re-list the segments to get a fresh url.`,
+      );
+    }
+
+    const res = await withRetry(
+      () => this.fetchImpl(url, { method: "GET", headers: { "User-Agent": this.userAgent } }),
+      {
+        maxRetries: this.maxRetries,
+        label: `GET ${parsed.origin}${parsed.pathname}`,
+        logger: this.logger,
+      },
+    );
+    const buf = Buffer.from(await res.arrayBuffer());
+
+    if (!res.ok) {
+      const text = buf.toString("utf8").slice(0, 500);
+      throw new AppStoreConnectApiError(
+        `Downloading the report segment failed: HTTP ${res.status} ${res.statusText}` +
+          (text ? ` — ${text}` : "") +
+          `. Segment URLs are short-lived and expire; re-list the segments for a fresh one.`,
+        { status: res.status, errors: text },
+      );
+    }
+    return isGzip(buf) ? gunzipSync(buf).toString("utf8") : buf.toString("utf8");
   }
 
   private parseErrors(text: string): AppStoreConnectError[] | unknown {

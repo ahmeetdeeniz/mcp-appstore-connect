@@ -218,3 +218,50 @@ describe("AppStoreConnectClient.downloadReport", () => {
     expect(out).toBe(tsv);
   });
 });
+
+describe("AppStoreConnectClient.downloadSignedFile", () => {
+  const SEGMENT_URL = "https://api-reports.itunes.apple.com/segments/abc?token=xyz";
+
+  const clientWith = (fetchImpl: ReturnType<typeof vi.fn>): AppStoreConnectClient =>
+    new AppStoreConnectClient({
+      tokenProvider: spyProvider(),
+      fetch: fetchImpl as unknown as typeof fetch,
+    });
+
+  it("gunzips the segment and sends no Authorization header", async () => {
+    const csv = "Date,Territory,Installations\n2026-06-01,US,1204\n";
+    const fetchImpl = vi.fn(async () => new Response(gzipSync(Buffer.from(csv)), { status: 200 }));
+
+    expect(await clientWith(fetchImpl).downloadSignedFile(SEGMENT_URL)).toBe(csv);
+    expect(callUrl(fetchImpl)).toBe(SEGMENT_URL);
+    // The pre-signed URL carries its own credentials; a Bearer token gets it rejected.
+    expect(callInit(fetchImpl).headers).not.toHaveProperty("Authorization");
+  });
+
+  it("passes an uncompressed body through rather than failing in gunzip", async () => {
+    const csv = "Date,Territory,Installations\n";
+    const fetchImpl = vi.fn(async () => new Response(csv, { status: 200 }));
+
+    expect(await clientWith(fetchImpl).downloadSignedFile(SEGMENT_URL)).toBe(csv);
+  });
+
+  it("refuses a url that is not on an apple.com host", async () => {
+    const fetchImpl = vi.fn(async () => new Response("nope", { status: 200 }));
+
+    await expect(
+      clientWith(fetchImpl).downloadSignedFile("https://evil.example.com/segments/abc"),
+    ).rejects.toThrow(/Refusing to download/);
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("explains that an expired url must be re-listed", async () => {
+    const fetchImpl = vi.fn(async () => new Response("AccessDenied", { status: 403 }));
+
+    await expect(clientWith(fetchImpl).downloadSignedFile(SEGMENT_URL)).rejects.toThrow(
+      AppStoreConnectApiError,
+    );
+    await expect(clientWith(fetchImpl).downloadSignedFile(SEGMENT_URL)).rejects.toThrow(
+      /short-lived and expire/,
+    );
+  });
+});
