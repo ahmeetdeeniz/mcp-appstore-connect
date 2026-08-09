@@ -5,10 +5,13 @@ import { registerAppInfoTools } from "./appinfos.js";
 import { registerAppTools } from "./apps.js";
 import { registerBuildTools } from "./builds.js";
 import { registerBundleIdTools } from "./bundleids.js";
+import { registerCategoryTools } from "./categories.js";
 import { registerDeviceTools } from "./devices.js";
 import { registerIapTools } from "./iap.js";
 import { registerListingTools } from "./listing.js";
+import { registerPricingTools } from "./pricing.js";
 import { registerReportTools } from "./reports.js";
+import { registerReviewDetailTools } from "./reviewdetails.js";
 import { registerScreenshotTools } from "./screenshots.js";
 import { registerSubmissionTools } from "./submissions.js";
 import { registerTestflightTools } from "./testflight.js";
@@ -43,6 +46,13 @@ export const registerTools = (
   registerVersionTools(server, client, allowWrites);
   registerSubmissionTools(server, client, allowWrites);
   registerAppInfoTools(server, client, allowWrites);
+  // Gates a first submission trips over, none of them version-scoped: category,
+  // content rights (on registerAppTools), price, and the review contact. The
+  // fifth — App Privacy — has no public API at all and is deliberately absent;
+  // see the README before trying to add it back.
+  registerCategoryTools(server, client, allowWrites);
+  registerPricingTools(server, client, allowWrites);
+  registerReviewDetailTools(server, client, allowWrites);
   registerIapTools(server, client, allowWrites);
   registerListingTools(server, client, ctx);
   registerScreenshotTools(server, client, allowWrites);

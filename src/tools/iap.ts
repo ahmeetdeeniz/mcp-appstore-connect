@@ -3,8 +3,7 @@ import { createHash } from "node:crypto";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 
-import type { AppStoreConnectClient, Query, UploadOperation } from "../client/asc.js";
-import { AppStoreConnectApiError } from "../client/errors.js";
+import type { AppStoreConnectClient, UploadOperation } from "../client/asc.js";
 import {
   attributesOf,
   includedOf,
@@ -18,7 +17,16 @@ import {
 // envelope. Aliased rather than imported bare so the two cannot be swapped by a
 // tidy-up.
 import { attributesOf as envelopeAttributes, idOf, pollAssetState, readImage } from "./assets.js";
-import { PreconditionError, appIdArg, compact, confirmArg, limitArg, wrap } from "./util.js";
+import {
+  PreconditionError,
+  appIdArg,
+  compact,
+  confirmArg,
+  getOrNull,
+  limitArg,
+  territoryArg,
+  wrap,
+} from "./util.js";
 
 const IAP_TYPES = ["CONSUMABLE", "NON_CONSUMABLE", "NON_RENEWING_SUBSCRIPTION"] as const;
 
@@ -60,41 +68,6 @@ const assertWithinLimits = (fields: { name?: string; description?: string }): vo
     );
   }
 };
-
-/**
- * GET a to-one sub-resource that may never have been created, e.g. an IAP's
- * price schedule or its availability.
- *
- * Apple does not answer those with `data: null` — it answers **404**, with a
- * message naming the *parent's* id as though it were a missing resource of the
- * child's type ("no resource of type 'inAppPurchaseAvailabilities' with id
- * <the IAP id>"). Surfaced raw that reads as a broken request rather than as
- * "not configured yet", which is the one thing the caller actually needs to
- * know: it is the state every IAP starts in and the reason it sits at
- * MISSING_METADATA.
- */
-const getOrNull = async <T>(
-  client: AppStoreConnectClient,
-  path: string,
-  query?: Query,
-): Promise<T | null> => {
-  try {
-    return await client.get<T>(path, query);
-  } catch (err) {
-    if (err instanceof AppStoreConnectApiError && err.status === 404) return null;
-    throw err;
-  }
-};
-
-/**
- * Apple keys territories by ISO-3166-1 alpha-3, and the base territory decides
- * which price point id is meaningful — a price point belongs to exactly one
- * territory, so USA's $4.99 and FRA's 5,99 € are different resources.
- */
-const territoryArg = z
-  .string()
-  .length(3)
-  .describe('Territory code (ISO-3166-1 alpha-3), e.g. "USA", "FRA", "JPN".');
 
 /**
  * A price point id names a fixed amount in one territory, so pricing an IAP with

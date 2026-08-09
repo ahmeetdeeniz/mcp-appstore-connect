@@ -195,7 +195,29 @@ npx @modelcontextprotocol/inspector npx -y @mgcrea/mcp-appstore-connect
 
 ## Tools
 
-**Apps** — `list_apps`, `get_app`
+**Apps** — `list_apps`, `get_app`, _`update_app`_\* — `update_app` carries `contentRightsDeclaration`, one of the gates below.
+
+**Submission prerequisites** — what a **first** submission trips over. None of these lives on the version, so nothing in the version's own state hints at them, and `submit_version_for_review` fails with one error per missing item and no id to chase. Each is set once and outlives every release:
+
+| Missing        | Apple's error                             | Fix with                                                                |
+| -------------- | ----------------------------------------- | ----------------------------------------------------------------------- |
+| Category       | `RELATIONSHIP.REQUIRED` on `/v1/appInfos` | `list_app_categories`, _`set_app_categories`_\*                         |
+| Content rights | `ATTRIBUTE.REQUIRED` on `/v1/apps`        | _`update_app`_\*                                                        |
+| App price      | `STATE_ERROR.APP_PRICING_REQUIRED`        | `list_app_price_points`, `get_app_price_schedule`, _`set_app_price`_\*† |
+| Review contact | `appStoreReviewDetail … was not found`    | `get_app_store_review_detail`, _`set_app_store_review_detail`_\*        |
+
+A **free** app still needs a price: "free" is a price point, not the absence of one, so an app nobody ever charged for stays blocked until `set_app_price` points at the 0 price point.
+
+`set_app_store_review_detail` creates or updates as needed: PATCH against a version with no detail 404s and POST against one that has it 409s, so the verb is a property of server state rather than of what you meant. Absence also arrives two ways — a 404, and a **200 with `data: null`** — and only handling the first sends a PATCH to a nonexistent id.
+
+> **App Privacy has no public API, and is the fifth gate.** A version is refused with `STATE_ERROR.APP_DATA_USAGES_REQUIRED` until the data-collection questionnaire is answered _and published_, and there is no route to do it. Tools for it were written against Apple's documented resource names, then removed when every endpoint 404'd. The evidence, so nobody has to establish it twice:
+>
+> - `appDataUsages`, `appDataUsageCategories`, `appDataUsagePurposes`, `appDataUsageDataProtections` and `appDataUsageGroupings` all answer `PATH_ERROR — The resource 'v1/…' does not exist`, and `appDataUsages` is absent from the app resource's ~40 relationships.
+> - **`POST` fails identically to `GET`.** A route that existed but disliked the body would answer 400 or 409; the same path error on both means it is not routed at all.
+> - **Not a permissions problem** — the same key reads `/v1/users` and `/v1/apps/{id}/accessibilityDeclarations` (a comparably recent app-scoped resource) with 200.
+> - `/v2/appDataUsages` and `appDataUsagesV2` are undefined types, so it is not a version-prefix issue. Note `PATH_ERROR` is a _different_ code from the `NOT_FOUND — path does not match a defined resource type` an invented name returns: Apple's gateway appears to know these names while not exposing them, which is why the docs describe resources you cannot call.
+>
+> Do it in the web UI: **App Privacy → Get Started**, answer, then **Publish** — saved-but-unpublished is refused exactly as unanswered is. The answers are app-scoped rather than version-scoped, so it is once per app, not once per release.
 
 **Listing round-trip** — `export_listing`, _`apply_listing`_\* — pull the whole listing into a git-committable metadata tree, edit it locally, push it back. See [Listing round-trip](#listing-round-trip).
 

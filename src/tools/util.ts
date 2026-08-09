@@ -1,5 +1,6 @@
 import { z } from "zod";
 
+import type { AppStoreConnectClient, Query } from "../client/asc.js";
 import { AppStoreConnectApiError, WritesDisabledError } from "../client/errors.js";
 
 export type ToolResult = {
@@ -122,3 +123,37 @@ export const confirmArg = z
 /** Drop undefined values so we never send `{"filter[x]": undefined}` upstream. */
 export const compact = <T extends Record<string, unknown>>(obj: T): Partial<T> =>
   Object.fromEntries(Object.entries(obj).filter(([, v]) => v !== undefined)) as Partial<T>;
+
+/**
+ * GET a to-one sub-resource that may never have been created, e.g. an app's
+ * price schedule, its review detail, or an IAP's availability.
+ *
+ * Apple does not answer those with `data: null` — it answers **404**, with a
+ * message naming the *parent's* id as though it were a missing resource of the
+ * child's type ("no resource of type 'appPriceSchedules' with id <the app id>").
+ * Surfaced raw that reads as a broken request rather than as "not configured
+ * yet", which is the one thing the caller actually needs to know: it is the
+ * state every app starts in, and the reason submission is refused.
+ */
+export const getOrNull = async <T>(
+  client: AppStoreConnectClient,
+  path: string,
+  query?: Query,
+): Promise<T | null> => {
+  try {
+    return await client.get<T>(path, query);
+  } catch (err) {
+    if (err instanceof AppStoreConnectApiError && err.status === 404) return null;
+    throw err;
+  }
+};
+
+/**
+ * Apple keys territories by ISO-3166-1 alpha-3, and the base territory decides
+ * which price point id is meaningful — a price point belongs to exactly one
+ * territory, so USA's $4.99 and FRA's 5,99 € are different resources.
+ */
+export const territoryArg = z
+  .string()
+  .length(3)
+  .describe('Territory code (ISO-3166-1 alpha-3), e.g. "USA", "FRA", "JPN".');
