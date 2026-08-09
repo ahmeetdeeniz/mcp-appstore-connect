@@ -37,15 +37,32 @@ const SALES_REPORT_TYPES = [
   "FIRST_ANNUAL",
 ] as const;
 
-/** Trim a downloaded TSV report so a huge one doesn't blow the context window. */
+/**
+ * Trim a downloaded TSV report so a huge one doesn't blow the context window.
+ *
+ * Apple terminates both the sales TSV and an analytics CSV segment with a
+ * newline, so a naive `split` leaves a phantom empty line at the end. Counting
+ * it overstates `rows`, and — the part that actually hurts — can tip a complete
+ * report past `maxLines` and flag it `truncated`. That is not a cosmetic error:
+ * `report_stats.py` treats truncation as a hard error precisely so a floor is
+ * never quoted as a total, so a false flag makes it refuse a file that lost
+ * nothing.
+ */
 const previewReport = (tsv: string, maxLines: number): Record<string, unknown> => {
   const lines = tsv.split("\n");
-  const truncated = lines.length > maxLines;
+  let count = lines.length;
+  while (count > 0 && lines[count - 1] === "") count -= 1;
+
+  const truncated = count > maxLines;
   return {
-    rows: lines.length,
+    // Content lines with the header included, so this is one more than the
+    // number of data rows.
+    rows: count,
     truncated,
-    ...(truncated ? { note: `Showing first ${maxLines} of ${lines.length} lines.` } : {}),
-    report: (truncated ? lines.slice(0, maxLines) : lines).join("\n"),
+    ...(truncated ? { note: `Showing first ${maxLines} of ${count} lines.` } : {}),
+    // Untruncated output is handed back byte-for-byte. Only the sliced path
+    // drops the trailing newline, and there the text is already partial.
+    report: truncated ? lines.slice(0, maxLines).join("\n") : tsv,
   };
 };
 

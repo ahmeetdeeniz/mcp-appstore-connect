@@ -1455,6 +1455,34 @@ describe("analytics reports", () => {
     expect(body.report.split("\n")).toHaveLength(5);
   });
 
+  /**
+   * Apple terminates every report with a newline, so splitting on it leaves a
+   * phantom empty line. Counting that line used to flag a complete report as
+   * truncated the moment its real content reached `maxLines` exactly. Nothing
+   * downstream shrugs that off: report_stats.py treats `truncated` as a hard
+   * error so a floor is never quoted as a total, so the false flag refused a
+   * file that had lost nothing.
+   */
+  it("does not call a complete report truncated because of its trailing newline", async () => {
+    const fetchImpl = vi.fn(async (url: string) =>
+      String(url).startsWith("https://api-reports.")
+        ? new Response(gzipSync(Buffer.from(CSV)), { status: 200 })
+        : jsonResponse(segmentsBody({ url: SEGMENT_URL, sizeInBytes: 512 })),
+    );
+
+    // CSV is a header plus two data rows — exactly maxLines of real content.
+    const result = await callTool(
+      "app_store_connect_download_analytics_report_segment",
+      { instanceId: INSTANCE_ID, maxLines: 3 },
+      fetchImpl as ReturnType<typeof vi.fn>,
+    );
+
+    const body = JSON.parse(textOf(result));
+    expect(body.truncated).toBe(false);
+    expect(body.rows).toBe(3); // content lines, not the phantom blank
+    expect(body.report).toBe(CSV);
+  });
+
   it("refuses an oversized segment before downloading it", async () => {
     const fetchImpl = vi.fn(async () =>
       jsonResponse(segmentsBody({ url: SEGMENT_URL, sizeInBytes: 900_000_000 })),
