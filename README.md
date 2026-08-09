@@ -245,6 +245,8 @@ A **free** app still needs a price: "free" is a price point, not the absence of 
 
 **Analytics** — `list_analytics_report_requests`, `list_analytics_reports`, `list_analytics_report_instances`, `list_analytics_report_segments`, `download_analytics_report_segment`, _`create_analytics_report_request`_\* — App Analytics proper: impressions, product page views, conversion rate, installs, deletions, sessions, retention. See [Reading analytics](#reading-analytics).
 
+**Customer reviews** — `list_customer_reviews` — star rating, title, body, territory and date, newest first; filter by rating to read just the complaints. These are **written** reviews only. Most people rate without writing, and Apple exposes no aggregate star average here, so a distribution computed from these is directional — it is not the App Store rating.
+
 **Users** — `list_users`
 
 **Bundle IDs** — `list_bundle_ids`, `get_bundle_id`, _`create_bundle_id`_\*, _`enable_capability`_\*, _`disable_capability`_\*†
