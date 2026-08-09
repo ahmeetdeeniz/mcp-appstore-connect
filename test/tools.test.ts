@@ -107,9 +107,14 @@ describe("tool registration", () => {
       "app_store_connect_list_users",
       "app_store_connect_list_bundle_ids",
       "app_store_connect_list_devices",
+      "app_store_connect_list_customer_reviews",
       "app_store_connect_list_iap_localizations",
       "app_store_connect_get_iap_review_screenshot",
       "app_store_connect_get_iap_availability",
+      "app_store_connect_list_app_categories",
+      "app_store_connect_list_app_price_points",
+      "app_store_connect_get_app_price_schedule",
+      "app_store_connect_get_app_store_review_detail",
     ]) {
       expect(readOnly, name).toContain(name);
       expect(withWrites, name).toContain(name);
@@ -150,6 +155,10 @@ describe("tool registration", () => {
       "app_store_connect_disable_capability",
       "app_store_connect_register_device",
       "app_store_connect_create_analytics_report_request",
+      "app_store_connect_update_app",
+      "app_store_connect_set_app_categories",
+      "app_store_connect_set_app_price",
+      "app_store_connect_set_app_store_review_detail",
     ]) {
       expect(readOnly, name).not.toContain(name);
       expect(withWrites, name).toContain(name);
@@ -1260,6 +1269,56 @@ describe("release_version", () => {
   });
 });
 
+describe("customer reviews", () => {
+  const APP_ID = "1234567890";
+
+  it("lists newest-first and comma-joins the rating filter", async () => {
+    const fetchImpl = vi.fn(async () => jsonResponse({ data: [] }));
+    const client = await connect(baseConfig, fetchImpl as unknown as typeof fetch);
+
+    await client.callTool({
+      name: "app_store_connect_list_customer_reviews",
+      arguments: { appId: APP_ID, rating: [1, 2], territory: "FRA" },
+    });
+
+    const url = new URL(callArgs(fetchImpl)[0]);
+    expect(url.pathname).toBe(`/v1/apps/${APP_ID}/customerReviews`);
+    // JSON:API takes a comma-joined list here, not repeated keys.
+    expect(url.searchParams.get("filter[rating]")).toBe("1,2");
+    expect(url.searchParams.get("filter[territory]")).toBe("FRA");
+    expect(url.searchParams.get("sort")).toBe("-createdDate");
+  });
+
+  it("omits the answered filter entirely when it is not asked for", async () => {
+    const fetchImpl = vi.fn(async () => jsonResponse({ data: [] }));
+    const client = await connect(baseConfig, fetchImpl as unknown as typeof fetch);
+
+    await client.callTool({
+      name: "app_store_connect_list_customer_reviews",
+      arguments: { appId: APP_ID },
+    });
+
+    const url = new URL(callArgs(fetchImpl)[0]);
+    expect(url.searchParams.has("exists[publishedResponse]")).toBe(false);
+    expect(url.searchParams.has("filter[rating]")).toBe(false);
+  });
+
+  it("passes answered:false through as the unanswered filter", async () => {
+    const fetchImpl = vi.fn(async () => jsonResponse({ data: [] }));
+    const client = await connect(baseConfig, fetchImpl as unknown as typeof fetch);
+
+    await client.callTool({
+      name: "app_store_connect_list_customer_reviews",
+      arguments: { appId: APP_ID, answered: false },
+    });
+
+    // `compact` drops undefined, not false — a `false` here is a real filter.
+    expect(new URL(callArgs(fetchImpl)[0]).searchParams.get("exists[publishedResponse]")).toBe(
+      "false",
+    );
+  });
+});
+
 describe("reports require a vendor number", () => {
   it("fails clearly when neither config nor argument supplies one", async () => {
     const fetchImpl = vi.fn(async () => jsonResponse({ data: [] }));
@@ -1689,5 +1748,219 @@ describe("in-app purchase availability", () => {
     expect(result.isError).toBe(true);
     expect((result.content as { text: string }[])[0]?.text ?? "").toContain("available nowhere");
     expect(postCall(fetchImpl, "/v1/inAppPurchaseAvailabilities")).toBeUndefined();
+  });
+});
+
+// The five gates a first submission trips over live on the app and the appInfo,
+// not on the version — so nothing in the version's own state hints at them, and
+// Apple reports each one against a resource path with no id to chase.
+const notFound = (): Response =>
+  new Response(JSON.stringify({ errors: [{ status: "404", code: "NOT_FOUND" }] }), {
+    status: 404,
+    headers: { "content-type": "application/json" },
+  });
+
+const bodyOf = (init: RequestInit | undefined): Record<string, unknown> =>
+  JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+
+describe("submission prerequisites", () => {
+  const APP_ID = "6798236186";
+  const VERSION_ID = "437e7c81-a74a-4aca-ab17-c26bad76fc67";
+
+  const callTool = async (
+    name: string,
+    args: Record<string, unknown>,
+    fetchImpl: ReturnType<typeof vi.fn>,
+  ): ReturnType<Client["callTool"]> => {
+    const client = await connect(
+      { ...baseConfig, allowWrites: true },
+      fetchImpl as unknown as typeof fetch,
+    );
+    return client.callTool({ name, arguments: args });
+  };
+
+  describe("set_app_store_review_detail", () => {
+    // PATCH against a version with no detail 404s and POST against one that has
+    // it 409s, so picking the verb is a property of server state. Getting this
+    // wrong is the whole reason the tool exists rather than two thinner ones.
+    it("creates the detail when the version has none", async () => {
+      // Matched on method, not path: the lookup GET ends in
+      // `/appStoreReviewDetail` and the create POST goes to
+      // `/appStoreReviewDetails`, so a substring match on the former also
+      // swallows the latter and the create 404s too.
+      const fetchImpl = vi.fn(async (_url: string, init?: RequestInit) =>
+        (init?.method ?? "GET") === "GET"
+          ? notFound()
+          : jsonResponse({ data: { id: "rd-1", type: "appStoreReviewDetails" } }),
+      );
+
+      const result = await callTool(
+        "app_store_connect_set_app_store_review_detail",
+        { versionId: VERSION_ID, contactEmail: "dev@example.com", demoAccountRequired: false },
+        fetchImpl,
+      );
+
+      expect(result.isError).toBeFalsy();
+      expect(textOf(result)).toContain('"created": true');
+
+      const post = postCall(fetchImpl, "/v1/appStoreReviewDetails");
+      expect(post).toBeDefined();
+      const data = bodyOf(post?.[1]).data as Record<string, unknown>;
+      expect((data.attributes as Record<string, unknown>).contactEmail).toBe("dev@example.com");
+      // demoAccountRequired: false must survive `compact`, which drops undefined
+      // and must not drop a meaningful false.
+      expect((data.attributes as Record<string, unknown>).demoAccountRequired).toBe(false);
+      expect(data.relationships).toEqual({
+        appStoreVersion: { data: { type: "appStoreVersions", id: VERSION_ID } },
+      });
+    });
+
+    it("patches the existing detail instead of creating a second one", async () => {
+      const fetchImpl = vi.fn(async () =>
+        jsonResponse({ data: { id: "rd-existing", type: "appStoreReviewDetails" } }),
+      );
+
+      const result = await callTool(
+        "app_store_connect_set_app_store_review_detail",
+        { versionId: VERSION_ID, notes: "No account needed." },
+        fetchImpl,
+      );
+
+      expect(result.isError).toBeFalsy();
+      expect(textOf(result)).toContain('"created": false');
+      expect(postCall(fetchImpl, "/v1/appStoreReviewDetails")).toBeUndefined();
+
+      const patch = patchCall(fetchImpl);
+      expect(patch?.[0]).toContain("/v1/appStoreReviewDetails/rd-existing");
+    });
+
+    it("reports a missing detail as null rather than a 404", async () => {
+      const fetchImpl = vi.fn(async () => notFound());
+
+      const result = await callTool(
+        "app_store_connect_get_app_store_review_detail",
+        { versionId: VERSION_ID },
+        fetchImpl,
+      );
+
+      expect(result.isError).toBeFalsy();
+      expect(textOf(result)).toContain("cannot be submitted");
+    });
+  });
+
+  describe("set_app_price", () => {
+    it("refuses a price point from another territory before pricing anything", async () => {
+      const fetchImpl = vi.fn(async () =>
+        jsonResponse({ data: [{ id: "usa-point", type: "appPricePoints", attributes: {} }] }),
+      );
+
+      const result = await callTool(
+        "app_store_connect_set_app_price",
+        {
+          appId: APP_ID,
+          pricePointId: "fra-point",
+          baseTerritory: "USA",
+          confirm: true,
+        },
+        fetchImpl,
+      );
+
+      expect(result.isError).toBe(true);
+      expect(textOf(result)).toContain("not one of this app's USA price points");
+      expect(postCall(fetchImpl, "/v1/appPriceSchedules")).toBeUndefined();
+    });
+
+    it("posts the schedule with the price inlined under `included`", async () => {
+      const fetchImpl = vi.fn(async (url: string) =>
+        String(url).includes("/appPricePoints")
+          ? jsonResponse({
+              data: [
+                {
+                  id: "free-point",
+                  type: "appPricePoints",
+                  attributes: { customerPrice: "0.00", proceeds: "0.00" },
+                },
+              ],
+            })
+          : jsonResponse({ data: { id: "sched-1", type: "appPriceSchedules" } }),
+      );
+
+      const result = await callTool(
+        "app_store_connect_set_app_price",
+        { appId: APP_ID, pricePointId: "free-point", baseTerritory: "USA", confirm: true },
+        fetchImpl,
+      );
+
+      expect(result.isError).toBeFalsy();
+      // The response is relationships only, so the echoed price is the caller's
+      // only confirmation of which amount landed.
+      expect(textOf(result)).toContain('"customerPrice": "0.00"');
+
+      const post = postCall(fetchImpl, "/v1/appPriceSchedules");
+      const body = bodyOf(post?.[1]);
+      const included = body.included as Record<string, unknown>[];
+      expect(included[0]?.type).toBe("appPrices");
+      // The placeholder id has to match on both sides or Apple rejects the create.
+      const data = body.data as Record<string, unknown>;
+      const rels = data.relationships as Record<string, { data?: { id?: string }[] }>;
+      expect(rels.manualPrices?.data?.[0]?.id).toBe(included[0]?.id);
+    });
+
+    it("reports an unpriced app as null rather than a 404", async () => {
+      const fetchImpl = vi.fn(async () => notFound());
+
+      const result = await callTool(
+        "app_store_connect_get_app_price_schedule",
+        { appId: APP_ID },
+        fetchImpl,
+      );
+
+      expect(result.isError).toBeFalsy();
+      expect(textOf(result)).toContain("never been priced");
+    });
+  });
+
+  describe("set_app_categories", () => {
+    it("sends the category as a relationship, and null clears the secondary", async () => {
+      const fetchImpl = vi.fn(async () => jsonResponse({ data: { id: "ai-1", type: "appInfos" } }));
+
+      const result = await callTool(
+        "app_store_connect_set_app_categories",
+        { appInfoId: "ai-1", primaryCategory: "PRODUCTIVITY", secondaryCategory: null },
+        fetchImpl,
+      );
+
+      expect(result.isError).toBeFalsy();
+      const rels = (bodyOf(patchCall(fetchImpl)?.[1]).data as Record<string, unknown>)
+        .relationships as Record<string, unknown>;
+
+      expect(rels.primaryCategory).toEqual({
+        data: { type: "appCategories", id: "PRODUCTIVITY" },
+      });
+      // Clearing is an explicit null relationship, and must stay distinguishable
+      // from "not mentioned" — which is what `undefined` means here.
+      expect(rels.secondaryCategory).toEqual({ data: null });
+      expect(rels.primarySubcategoryOne).toBeUndefined();
+    });
+  });
+
+  describe("update_app", () => {
+    it("patches the content rights declaration", async () => {
+      const fetchImpl = vi.fn(async () => jsonResponse({ data: { id: APP_ID, type: "apps" } }));
+
+      const result = await callTool(
+        "app_store_connect_update_app",
+        { appId: APP_ID, contentRightsDeclaration: "USES_THIRD_PARTY_CONTENT" },
+        fetchImpl,
+      );
+
+      expect(result.isError).toBeFalsy();
+      const patch = patchCall(fetchImpl);
+      expect(patch?.[0]).toContain(`/v1/apps/${APP_ID}`);
+      expect(
+        ((bodyOf(patch?.[1]).data as Record<string, unknown>).attributes as Record<string, unknown>)
+          .contentRightsDeclaration,
+      ).toBe("USES_THIRD_PARTY_CONTENT");
+    });
   });
 });
