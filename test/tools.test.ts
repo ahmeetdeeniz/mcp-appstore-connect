@@ -73,6 +73,7 @@ describe("tool registration", () => {
       "app_store_connect_list_apps",
       "app_store_connect_get_app",
       "app_store_connect_list_versions",
+      "app_store_connect_get_version",
       "app_store_connect_list_review_submissions",
       "app_store_connect_list_app_infos",
       "app_store_connect_list_app_info_localizations",
@@ -297,6 +298,90 @@ describe("create_beta_group", () => {
 
     expect(result.isError).toBe(true);
     expect(fetchImpl).not.toHaveBeenCalled();
+  });
+});
+
+describe("get_version", () => {
+  const VERSION_ID = "3f3f8952-b1af-4704-8568-353fadf04d10";
+  const BUILD_ID = "6befb88e-44c3-4230-a493-6bb43c11a078";
+
+  const body = (attached: boolean): unknown => ({
+    data: {
+      id: VERSION_ID,
+      type: "appStoreVersions",
+      attributes: {
+        platform: "MAC_OS",
+        versionString: "1.3.0",
+        appStoreState: "PREPARE_FOR_SUBMISSION",
+      },
+      relationships: {
+        app: { data: { id: "6763524532", type: "apps" } },
+        build: attached ? { data: { id: BUILD_ID, type: "builds" } } : { data: null },
+      },
+    },
+    included: attached
+      ? [
+          {
+            id: BUILD_ID,
+            type: "builds",
+            attributes: {
+              version: "155",
+              uploadedDate: "2026-08-03T13:46:17-07:00",
+              processingState: "VALID",
+              expired: false,
+            },
+          },
+        ]
+      : [],
+  });
+
+  const callTool = async (fetchImpl: ReturnType<typeof vi.fn>): ReturnType<Client["callTool"]> => {
+    const client = await connect(baseConfig, fetchImpl as unknown as typeof fetch);
+    return client.callTool({
+      name: "app_store_connect_get_version",
+      arguments: { versionId: VERSION_ID },
+    });
+  };
+
+  it("resolves the attached build, which summarizeResponse would have dropped", async () => {
+    const fetchImpl = vi.fn(async () => jsonResponse(body(true)));
+
+    const result = await callTool(fetchImpl);
+
+    // Without include=build Apple returns no `included`, and the whole point of
+    // the tool is lost — assert the request, not just the response.
+    expect(callArgs(fetchImpl)[0]).toContain("include=build");
+    expect(JSON.parse((result.content as { text: string }[])[0]?.text ?? "{}")).toEqual({
+      id: VERSION_ID,
+      platform: "MAC_OS",
+      versionString: "1.3.0",
+      appStoreState: "PREPARE_FOR_SUBMISSION",
+      appId: "6763524532",
+      build: {
+        id: BUILD_ID,
+        version: "155",
+        uploadedDate: "2026-08-03T13:46:17-07:00",
+        processingState: "VALID",
+        expired: false,
+      },
+    });
+  });
+
+  it("reports a version with no build attached as null rather than omitting it", async () => {
+    const result = await callTool(vi.fn(async () => jsonResponse(body(false))));
+
+    expect(JSON.parse((result.content as { text: string }[])[0]?.text ?? "{}").build).toBeNull();
+  });
+
+  it("still returns the build id when Apple sideloads no build resource", async () => {
+    const withoutInclude = body(true) as { included: unknown[] };
+    withoutInclude.included = [];
+
+    const result = await callTool(vi.fn(async () => jsonResponse(withoutInclude)));
+
+    expect(JSON.parse((result.content as { text: string }[])[0]?.text ?? "{}").build).toEqual({
+      id: BUILD_ID,
+    });
   });
 });
 

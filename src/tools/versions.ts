@@ -236,6 +236,43 @@ export const registerVersionTools = (
   );
 
   server.registerTool(
+    "app_store_connect_get_version",
+    {
+      description:
+        "Get one App Store version with the build attached to it. This is the only read that " +
+        'answers "which binary would this version actually ship?" — app_store_connect_list_versions ' +
+        "returns attributes only, so the build link is invisible there. Use it before submitting: " +
+        "a version whose build predates your latest work ships that older binary, and the build's " +
+        "uploadedDate is what tells you. `build` is null when nothing is attached yet.",
+      inputSchema: { versionId: versionIdArg },
+      annotations: { readOnlyHint: true },
+    },
+    async ({ versionId }) =>
+      wrap(async () => {
+        // The build lives in `relationships` and `included`, both of which
+        // summarizeResponse drops — hence the hand-built shape.
+        const response = await client.get(`/v1/appStoreVersions/${versionId}`, {
+          include: "build",
+        });
+        const version = resourceOf(response);
+        const build = firstIncluded(response, "builds");
+        // Apple can return the relationship without sideloading the resource, so
+        // the id comes from the relationship and the detail from `included`.
+        const buildId = relatedId(version, "build");
+
+        return {
+          id: version.id,
+          ...attributesOf(version),
+          appId: relatedId(version, "app"),
+          build:
+            buildId === undefined
+              ? null
+              : { id: buildId, ...(build === undefined ? {} : attributesOf(build)) },
+        };
+      }),
+  );
+
+  server.registerTool(
     "app_store_connect_list_version_localizations",
     {
       description:
