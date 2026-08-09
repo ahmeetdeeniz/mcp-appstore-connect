@@ -164,6 +164,12 @@ analysis as failed. Then Apple needs a day or two before the first instance
 appears, so the first run of this skill on a new app returns no analytics at
 all. Fall back to Sales and Trends and say what is pending.
 
+The `accessType` matters more than it looks. `ONGOING` accumulates from the
+moment it is created and backfills nothing; `ONE_TIME_SNAPSHOT` reaches back
+roughly 52 weeks. On an app that has already shipped releases, only the snapshot
+can produce a funnel for any of them, and its window keeps rolling forward — a
+launch older than ~52 weeks is gone for good. Propose both on a first run.
+
 **Sales reports need a vendor number.** They fail with "A vendor number is
 required" unless `APP_STORE_CONNECT_VENDOR_NUMBER` is set in the MCP server
 environment. It is found under Payments and Financial Reports in App Store

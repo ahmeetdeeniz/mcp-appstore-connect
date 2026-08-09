@@ -93,6 +93,23 @@ two to produce the first instance, so a first run on a new app legitimately has
 no funnel data. Report the sales half and say what is pending — do not present
 an empty analytics result as a collapse.
 
+**Ask for both access types, and say why.** `accessType` decides whether you
+ever see the past:
+
+- `ONGOING` accumulates from the day it is created and **backfills nothing**.
+- `ONE_TIME_SNAPSHOT` covers roughly the last 52 weeks — on an app that has been
+  shipping for months, this is the only route to a funnel for any release that
+  already happened.
+
+Creating only the ONGOING one on a never-enabled app quietly forfeits the app's
+whole history, and the loss is invisible: next month's run looks healthy because
+it has data, and nobody notices the launch it cannot see. So on a first run,
+propose both. The snapshot is also the one with a deadline — its window rolls
+forward, so a launch older than ~52 weeks is gone for good.
+
+Both are writes against the user's account. Confirm before creating either, and
+name what each buys.
+
 Ratings are cheap and often the most actionable thing in the run:
 
 ```

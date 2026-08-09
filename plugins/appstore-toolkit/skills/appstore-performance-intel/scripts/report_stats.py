@@ -53,6 +53,13 @@ NON_ADDITIVE = {"Unique Counts", "Unique Devices"}
 # is the one that actually shows up, and a summed app id is pure noise.
 ID_COLUMN = re.compile(r"\b(identifier|id)\b", re.IGNORECASE)
 
+# Version strings parse as numbers ("1.2" -> 1.2) and slip straight past
+# ID_COLUMN, so a Sales report would report a summed version number as though it
+# were a total. Named rather than pattern-matched, because these are Apple's
+# exact column names -- and excluding them here also promotes them to the
+# `groupable` list, which is where a version actually belongs.
+LABEL_COLUMNS = {"Version", "App Version", "Platform Version"}
+
 # Sales and Trends money columns are PER UNIT, not per row. Total spend is
 # Units x Customer Price; total proceeds is Units x Developer Proceeds. Summing
 # the column straight is the classic mistake and understates a busy day by
@@ -61,6 +68,16 @@ PER_UNIT_PRICE = "Customer Price"
 PER_UNIT_PROCEEDS = "Developer Proceeds"
 UNITS = "Units"
 PRODUCT_TYPE = "Product Type Identifier"
+
+# Summing either of these straight is meaningless -- that is what `money` is
+# for. Hiding them from `summary` is worse though: a file with money in it that
+# shows no money column reads as "this app earned nothing". So they are listed,
+# carrying a flag that says what they are.
+PER_UNIT_COLUMNS = {PER_UNIT_PRICE, PER_UNIT_PROCEEDS}
+
+# Columns that stay in the summary even when every row holds the same value.
+# See numeric_columns for why the general rule has to make an exception.
+ALWAYS_SUMMABLE = set(METRIC_PREFERENCE) | PER_UNIT_COLUMNS
 
 # Which currency each of those is denominated in. They differ: a French sale
 # has Customer Price in EUR and Developer Proceeds in whatever Apple pays that
@@ -144,17 +161,26 @@ def to_number(value):
 def numeric_columns(rows, columns):
     """Columns where most non-empty cells parse as numbers and a sum means something.
 
-    Identifiers parse as numbers but adding them up is noise, and so is any
-    column holding one repeated value -- both are excluded so the summary shows
-    only totals worth reading.
+    Identifiers parse as numbers but adding them up is noise, and so is a column
+    holding one repeated value -- a version string, a provider code. Both are
+    excluded so the summary shows only totals worth reading.
+
+    The constant-value rule needs one exception, and it bites hardest on exactly
+    the apps this script is most useful for: a low-volume seller really does
+    move one unit per row, which makes `Units` constant. Dropping it there hid
+    every total the report existed to produce -- silently, since a missing line
+    looks the same as a column that was not in the file. So the known metric and
+    money columns are kept whatever their cardinality.
     """
     found = []
     for col in columns:
-        if ID_COLUMN.search(col):
+        if ID_COLUMN.search(col) or col in LABEL_COLUMNS:
             continue
         cells = [str(r.get(col, "")).strip() for r in rows]
         present = [c for c in cells if c]
-        if not present or len(set(present)) == 1:
+        if not present:
+            continue
+        if len(set(present)) == 1 and col not in ALWAYS_SUMMABLE:
             continue
         parsed = [to_number(c) for c in present]
         if sum(v is not None for v in parsed) >= max(1, len(present) * 0.8):
@@ -262,7 +288,12 @@ def cmd_summary(args):
         for metric in numeric:
             totals, counted = aggregate(rows, [], metric)
             value = totals.get((), 0.0)
-            flag = "  (not additive -- upper bound)" if metric in NON_ADDITIVE else ""
+            if metric in NON_ADDITIVE:
+                flag = "  (not additive -- upper bound)"
+            elif metric in PER_UNIT_COLUMNS:
+                flag = "  (PER UNIT -- not a revenue total; use `money`)"
+            else:
+                flag = ""
             print("   sum(%s) = %s over %d rows%s" % (metric, fmt(value), counted, flag))
         # Dimensions are the interesting thing to group by next, so name the
         # low-cardinality ones rather than making the caller guess.
