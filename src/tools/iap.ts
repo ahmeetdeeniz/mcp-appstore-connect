@@ -714,11 +714,21 @@ export const registerIapTools = (
     "app_store_connect_submit_in_app_purchase_for_review",
     {
       description:
-        "Submit an in-app purchase to Apple for review. The IAP must already be " +
-        "`READY_TO_SUBMIT` — that means a display name, a description, a price and a review " +
-        "screenshot are all in place; check `state` with app_store_connect_get_in_app_purchase " +
-        "first, because `MISSING_METADATA` is refused here. A first-ever IAP is reviewed " +
-        "alongside the app version that introduces it, so it also needs that version submitted.",
+        "Submit an in-app purchase to Apple for review — for a SECOND or later one only. The " +
+        "IAP must already be `READY_TO_SUBMIT`: a display name, a description, a price and a " +
+        "review screenshot all in place; check `state` with app_store_connect_get_in_app_purchase " +
+        "first, because `MISSING_METADATA` is refused here.\n\n" +
+        "An app's **first** non-consumable cannot be submitted by this tool, or by any other " +
+        "part of the API. Apple refuses it with " +
+        "`STATE_ERROR.FIRST_NON_CONSUMABLE_MUST_BE_SUBMITTED_ON_VERSION` — it has to travel " +
+        "inside the version's own review submission, and there is no route that puts it there: " +
+        "`reviewSubmissionItems` rejects both `inAppPurchase` and `inAppPurchaseV2` with " +
+        "RELATIONSHIP.UNKNOWN, `appStoreVersions` has no `inAppPurchases` relationship, and the " +
+        "IAP has no `appStoreVersion` relationship. Submitting the version first does NOT pick " +
+        "it up — the version goes to review alone and the IAP stays `READY_TO_SUBMIT`, which " +
+        "ships an app whose paywall sells a product Apple never approved. Do that one in the " +
+        "App Store Connect web UI: the version page's **Add for Review** panel lists the IAP " +
+        "beside the version; add both, then submit.",
       inputSchema: { inAppPurchaseId: inAppPurchaseIdArg, confirm: confirmArg },
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false },
     },

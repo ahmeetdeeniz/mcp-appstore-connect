@@ -219,6 +219,10 @@ A **free** app still needs a price: "free" is a price point, not the absence of 
 >
 > Do it in the web UI: **App Privacy → Get Started**, answer, then **Publish** — saved-but-unpublished is refused exactly as unanswered is. The answers are app-scoped rather than version-scoped, so it is once per app, not once per release.
 
+> **An app's first non-consumable IAP has no API path either**, and this one is worse because nothing fails until it is too late. Apple requires it to travel _inside_ the version's review submission (`STATE_ERROR.FIRST_NON_CONSUMABLE_MUST_BE_SUBMITTED_ON_VERSION`), and no route puts it there: `reviewSubmissionItems` rejects `inAppPurchase` and `inAppPurchaseV2` with `RELATIONSHIP.UNKNOWN`, `appStoreVersions` has no `inAppPurchases` relationship, and the IAP has no `appStoreVersion` relationship.
+>
+> **`submit_version_for_review` succeeds and silently leaves the IAP behind.** The version goes to review alone, the IAP stays `READY_TO_SUBMIT`, and the app ships with a paywall selling a product Apple never approved. So after submitting a release that introduces one, re-read `list_in_app_purchases`: a first IAP still reading `READY_TO_SUBMIT` means it was left out. Recovering means cancelling the submission — which returns the version to `DEVELOPER_REJECTED`, still submittable — and using the version page's **Add for Review** panel, which lists the IAP beside the version. Second and later IAPs go through `submit_in_app_purchase_for_review` normally.
+
 **Listing round-trip** — `export_listing`, _`apply_listing`_\* — pull the whole listing into a git-committable metadata tree, edit it locally, push it back. See [Listing round-trip](#listing-round-trip).
 
 **Versions & metadata** — `list_versions`, `get_version` (resolves the attached build — which binary the version would actually ship, and when it was uploaded), `list_version_localizations`, `get_version_localization`, _`create_version`_\*, _`update_version`_\* (release type — auto on approval, manual, or scheduled), _`update_version_localization`_\* (description, keywords, what's-new, promo text)
