@@ -11,8 +11,9 @@
       "name": "month-over-month-attribution",
       "fixture": "pixelwright-may-june",
       "prompt": "how did pixelwright do in june vs may? the numbers look weird to me, downloads are way up but it doesnt feel like it",
-      "expected_output": "A dated markdown report. Total Units did rise ~16x but that is a type-7 update flood from the 2.1 release on 12 June; paid purchases are flat (412 -> 398) and this distinction is made explicitly rather than reported as a sales surge. Money is weighted per-unit and split by currency, never combined into one figure. The headline finding is the discovery shift: App Store Search impressions -30%, Web Referrer +315%, consistent with the site launch. Conversion, where quoted, names both source reports and the window.",
+      "expected_output": "A single living markdown report at <docs-dir>/appstore-performance.md, rewritten in place rather than written as a dated per-run file, with a run log entry appended for this run. Total Units did rise ~16x but that is a type-7 update flood from the 2.1 release on 12 June; paid purchases are flat (412 -> 398) and this distinction is made explicitly rather than reported as a sales surge. Money is weighted per-unit and split by currency, never combined into one figure. The headline finding is the discovery shift: App Store Search impressions -30%, Web Referrer +315%, consistent with the site launch. Conversion, where quoted, names both source reports and the window.",
       "assertions": [
+        "The report is written to a single living file, not a dated per-run one, and carries a run log entry",
         "The unit spike is attributed to type-7 updates, not reported as a downloads or sales surge",
         "Paid purchases are shown as roughly flat (412 -> 398), separated from updates",
         "report_stats.py is used for the aggregation rather than the numbers being summed by eye",

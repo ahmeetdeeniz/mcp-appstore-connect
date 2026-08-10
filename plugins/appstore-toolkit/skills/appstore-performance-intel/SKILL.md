@@ -1,20 +1,21 @@
 ---
 name: appstore-performance-intel
-description: Analyze how a shipped app is actually doing on the App Store — downloads, units, sales and proceeds, impressions, product page views, conversion rate, retention, deletions, and the star ratings behind them — by pulling the real numbers from App Store Connect and writing a dated markdown report. Use this whenever the user asks how their app is performing, what downloads or sales are doing, whether revenue is up or down, why conversion or installs dropped, where their traffic comes from, which territories matter, how a release affected the numbers, or asks for a performance / metrics / downloads / sales / revenue report — including the standing "how did we do last month" check. Reach for it even when the ask is vague or emotional ("did the 2.1 launch work?", "feels like downloads died", "are we growing?"), because the failure mode of answering those from memory is inventing a trend, and the checks that catch that live here. Also use it when a number needs explaining rather than producing — "why do App Store Connect and my analytics disagree", "is that units figure revenue or downloads", "what counts as an impression". This skill measures, diagnoses and recommends store-side actions from what it measured; feature and competitive strategy belong to app-market-intel.
+description: Analyze how a shipped app is actually doing on the App Store — downloads, units, sales and proceeds, impressions, product page views, conversion rate, retention, deletions, and the star ratings behind them — by pulling the real numbers from App Store Connect into a single living markdown report. Use this whenever the user asks how their app is performing, what downloads or sales are doing, whether revenue is up or down, why conversion or installs dropped, where their traffic comes from, which territories matter, how a release affected the numbers, or asks for a performance / metrics / downloads / sales / revenue report — including the standing "how did we do last month" check. Reach for it even when the ask is vague or emotional ("did the 2.1 launch work?", "feels like downloads died", "are we growing?"), because the failure mode of answering those from memory is inventing a trend, and the checks that catch that live here. Also use it when a number needs explaining rather than producing — "why do App Store Connect and my analytics disagree", "is that units figure revenue or downloads", "what counts as an impression". This skill measures, diagnoses and recommends store-side actions from what it measured; feature and competitive strategy belong to app-market-intel.
 ---
 
 # App Store performance intel
 
 This answers one question with real data: **what are the numbers doing, and
 why?** It reads App Store Connect, does the arithmetic in a script rather than
-by eye, and writes a dated report you can diff against last month's.
+by eye, and maintains one living markdown report you can diff against last
+month's.
 
 **Every run has two deliverables, and neither substitutes for the other:** the
-dated markdown file, and a summary of it in the conversation. A file path alone
-makes the user open a document to learn whether anything is wrong; a chat-only
-answer leaves nothing to diff next month. Step 6 specifies the summary — it is
-not a sign-off line, it is the report's findings rendered for someone who will
-not open the file.
+markdown file, and a summary of it in the conversation. A file path alone makes
+the user open a document to learn whether anything is wrong; a chat-only answer
+leaves nothing to diff next month. Step 6 specifies the summary — it is not a
+sign-off line, it is the report's findings rendered for someone who will not open
+the file.
 
 The failure modes here are specific and they are why the skill exists. People
 quote a truncated report as a total. They sum a per-unit money column and
@@ -241,18 +242,48 @@ metric's fall is explained by something with no number attached to it.
 
 ## 5. Write the report
 
-Write to `<docs-dir>/performance/<YYYY-MM-DD>-performance.md` — alongside
-whatever documentation directory the repo already uses, creating it if needed. If
-the repo has no documentation directory at all (common on app repos that keep
-only `CHANGELOG.md` and a listing tree), do not go hunting across sibling repos
-or invent a novel location: create `docs/performance/` at the root of the repo
-the app lives in, and say in the summary that you created it. Only ask when there
-is no repo to put it in.
+**One living document, rewritten in place: `<docs-dir>/appstore-performance.md`.**
+Put it alongside whatever documentation directory the repo already uses. If the
+repo has no documentation directory at all (common on app repos that keep only
+`CHANGELOG.md` and a listing tree), do not go hunting across sibling repos or
+invent a novel location: create `docs/` at the root of the repo the app lives in,
+and say in the summary that you created it. Only ask when there is no repo to put
+it in.
+
+Do **not** write a dated file per run. Runs cluster — a release week can produce
+three in two days — and dated files then accumulate near-identical documents that
+disagree at the edges, which is worse than no history: a reader who opens the
+wrong one gets last week's conclusion with this week's date on it. The living
+document has exactly one current answer, and its history lives in the run log at
+the bottom and in the repo's own version control, which diffs better than two
+files side by side ever did.
+
+When a run supersedes an earlier finding, **rewrite the body and record the
+correction in the run log** rather than leaving the old claim standing beside the
+new one. Never leave two files on disk answering the same question differently.
+
+If you find dated reports or a separate `ledger.md` from an earlier version of
+this skill, fold them into the living document and say in the summary that they
+are now redundant. Do not delete them yourself unless asked — they may be
+untracked, in which case deletion is unrecoverable.
 
 Use this shape:
 
 ```markdown
-# <App> — performance, <window as explicit dates>
+# <App> — App Store performance
+
+Living document. Rewritten in place each run; the run log at the bottom keeps
+the history.
+
+**Last updated:** <YYYY-MM-DD> · **Data through:** <last date Apple has generated>
+
+<app id, SKU, platform, launch date, IAP ids, and the vendor-scope caveat>
+
+## Where it stands
+
+Two or three sentences of standing context — how old the app is, what order of
+magnitude the numbers are, and how to read them. A returning reader needs this
+before any table means anything.
 
 ## Headline
 
@@ -288,12 +319,22 @@ Store-side actions only, each one naming the number it comes from.
 
 What could not be measured and why — no vendor number, no analytics request,
 Apple's lag, a window with no data. This section is not optional.
+
+## Run log
+
+One bullet per run, newest first: the date, the window, the headline figure, and
+anything this run corrected in an earlier one.
 ```
 
-Then append one line to `<docs-dir>/performance/ledger.md`: the date, the window
-and the headline figure. Next month's run reads it first, which is what turns a
-series of snapshots into a trend and stops the same movement being reported as
-new three times running.
+**Read the run log before pulling anything, and append to it last.** It is what
+turns a series of snapshots into a trend and stops the same movement being
+reported as new three runs running. A movement already recorded there is not
+news — say it is unchanged and spend the run on what is.
+
+Each entry should survive being read a year later without the rest of the
+document: the window as explicit dates, the figure that mattered, and any
+supersede note. Keep entries to a few lines; the body of the document carries the
+detail, and a run log that grows into a second report defeats the point.
 
 Do not commit anything unless asked.
 
