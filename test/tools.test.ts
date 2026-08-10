@@ -24,6 +24,13 @@ const jsonResponse = (body: unknown): Response =>
     headers: { "content-type": "application/json" },
   });
 
+/** Apple answers the report endpoints with a gzipped TSV, not JSON. */
+const gzipResponse = (body: string): Response =>
+  new Response(gzipSync(Buffer.from(body)), {
+    status: 200,
+    headers: { "content-type": "application/a-gzip" },
+  });
+
 const connect = async (
   config: Config,
   fetchImpl: typeof fetch = vi.fn(async () =>
@@ -97,6 +104,7 @@ describe("tool registration", () => {
       "app_store_connect_list_beta_groups",
       "app_store_connect_list_beta_testers",
       "app_store_connect_list_beta_feedback",
+      "app_store_connect_get_vendor_number",
       "app_store_connect_download_sales_report",
       "app_store_connect_download_finance_report",
       "app_store_connect_list_analytics_report_requests",
@@ -1333,6 +1341,175 @@ describe("reports require a vendor number", () => {
     const text = (result.content as { text: string }[])[0]?.text ?? "";
     expect(text).toContain("vendor number");
     expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  /**
+   * Apple does not distinguish "that vendor number is not yours" from a genuine
+   * server fault: both are a bare 500 UNEXPECTED_ERROR telling you to contact
+   * support. Since there is no endpoint that lists valid vendor numbers, the
+   * raw error sends you to the status page instead of to the wrong field.
+   */
+  it("reads a 500 on a sales report as a probable bad vendor number", async () => {
+    const fetchImpl = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ errors: [{ code: "UNEXPECTED_ERROR" }] }), {
+          status: 500,
+          headers: { "content-type": "application/json" },
+        }),
+    );
+    const client = await connect(
+      { ...baseConfig, maxRetries: 0 },
+      fetchImpl as unknown as typeof fetch,
+    );
+
+    const result = await client.callTool({
+      name: "app_store_connect_download_sales_report",
+      arguments: { reportDate: "2026-06", vendorNumber: "00000000" },
+    });
+
+    expect(result.isError).toBe(true);
+    const text = (result.content as { text: string }[])[0]?.text ?? "";
+    expect(text).toContain("00000000");
+    expect(text).toContain("Payments and Financial Reports");
+    // The genuine-outage case must stay reachable, not be asserted away.
+    expect(text).toContain("retry");
+  });
+});
+
+describe("get_vendor_number", () => {
+  it("returns where to look instead of failing when none is configured", async () => {
+    const fetchImpl = vi.fn(async () => jsonResponse({ data: [] }));
+    const client = await connect(baseConfig, fetchImpl as unknown as typeof fetch);
+
+    const result = await client.callTool({
+      name: "app_store_connect_get_vendor_number",
+      arguments: {},
+    });
+
+    // Not an error: "you have not set one, here is where it lives" is the
+    // answer, and an isError result would push a caller to give up instead.
+    expect(result.isError).toBeFalsy();
+    const body = JSON.parse(textOf(result)) as Record<string, unknown>;
+    expect(body.configured).toBe(false);
+    expect(body.vendorNumber).toBeNull();
+    expect(String(body.hint)).toContain("S_<frequency>_<vendorNumber>_<date>.txt");
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("reports which config layer supplied the number", async () => {
+    const fetchImpl = vi.fn(async () => gzipResponse("Provider\tVendor\n"));
+    const client = await connect(
+      { ...baseConfig, vendorNumber: "85326407", vendorNumberSource: "file" },
+      fetchImpl as unknown as typeof fetch,
+    );
+
+    const result = await client.callTool({
+      name: "app_store_connect_get_vendor_number",
+      arguments: {},
+    });
+
+    const body = JSON.parse(textOf(result)) as Record<string, unknown>;
+    expect(body).toMatchObject({ vendorNumber: "85326407", source: "file", readable: true });
+  });
+
+  it("probes a recent daily report and skips the call when verify is off", async () => {
+    const fetchImpl = vi.fn(async () => gzipResponse("Provider\tVendor\n"));
+    const client = await connect(
+      { ...baseConfig, vendorNumber: "85326407", vendorNumberSource: "environment" },
+      fetchImpl as unknown as typeof fetch,
+    );
+
+    await client.callTool({
+      name: "app_store_connect_get_vendor_number",
+      arguments: {},
+    });
+    const url = new URL(callArgs(fetchImpl)[0]);
+    expect(url.pathname).toBe("/v1/salesReports");
+    expect(url.searchParams.get("filter[vendorNumber]")).toBe("85326407");
+    expect(url.searchParams.get("filter[frequency]")).toBe("DAILY");
+    // Five days back, so the probe cannot fail on a day Apple has not closed yet.
+    expect(url.searchParams.get("filter[reportDate]")).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+
+    const skipped = await client.callTool({
+      name: "app_store_connect_get_vendor_number",
+      arguments: { verify: false },
+    });
+    expect(JSON.parse(textOf(skipped))).toMatchObject({ verified: false, source: "environment" });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  /**
+   * The inverted signal: a 404 is Apple saying "no sales that day", which it can
+   * only say after resolving and authorising the vendor. Treating it as failure
+   * would make a valid vendor number on a quiet account unverifiable.
+   */
+  it("treats a no-sales 404 as proof the vendor number is readable", async () => {
+    const fetchImpl = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ errors: [{ code: "NOT_FOUND" }] }), {
+          status: 404,
+          headers: { "content-type": "application/json" },
+        }),
+    );
+    const client = await connect(
+      { ...baseConfig, vendorNumber: "85326407", vendorNumberSource: "file" },
+      fetchImpl as unknown as typeof fetch,
+    );
+
+    const result = await client.callTool({
+      name: "app_store_connect_get_vendor_number",
+      arguments: {},
+    });
+
+    expect(result.isError).toBeFalsy();
+    expect(JSON.parse(textOf(result))).toMatchObject({ readable: true });
+  });
+
+  it("reports a 500 as an unreadable vendor number without erroring the tool", async () => {
+    const fetchImpl = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ errors: [{ code: "UNEXPECTED_ERROR" }] }), {
+          status: 500,
+          headers: { "content-type": "application/json" },
+        }),
+    );
+    const client = await connect(
+      { ...baseConfig, maxRetries: 0, vendorNumber: "00000000", vendorNumberSource: "environment" },
+      fetchImpl as unknown as typeof fetch,
+    );
+
+    const result = await client.callTool({
+      name: "app_store_connect_get_vendor_number",
+      arguments: { vendorNumber: "00000000" },
+    });
+
+    // A diagnostic that throws tells you nothing; the verdict is the payload.
+    expect(result.isError).toBeFalsy();
+    const body = JSON.parse(textOf(result)) as Record<string, unknown>;
+    expect(body).toMatchObject({ readable: false, source: "argument" });
+    expect(String((body.probe as Record<string, unknown>).detail)).toContain("retry");
+  });
+
+  it("rethrows an auth failure rather than blaming the vendor number", async () => {
+    const fetchImpl = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ errors: [{ code: "FORBIDDEN_ERROR" }] }), {
+          status: 403,
+          headers: { "content-type": "application/json" },
+        }),
+    );
+    const client = await connect(
+      { ...baseConfig, maxRetries: 0, vendorNumber: "85326407", vendorNumberSource: "file" },
+      fetchImpl as unknown as typeof fetch,
+    );
+
+    const result = await client.callTool({
+      name: "app_store_connect_get_vendor_number",
+      arguments: {},
+    });
+
+    expect(result.isError).toBe(true);
+    expect(textOf(result)).not.toContain('"readable"');
   });
 });
 

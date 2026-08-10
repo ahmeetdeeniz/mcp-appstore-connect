@@ -91,6 +91,7 @@ If you'd rather not put credentials in your shell profile or in every MCP client
   "issuerId": "00000000-0000-0000-0000-000000000000",
   "p8Path": "~/path/to/AuthKey_XXXXXXXXXX.p8",
   "allowWrites": true,
+  "vendorNumber": "80000123",
 }
 ```
 
@@ -104,6 +105,7 @@ With this in place an MCP client needs no `env` block at all — just `npx -y @m
 
 - **The environment wins, field by field.** A config file supplies whatever the environment doesn't, so Docker and CI keep working exactly as before, and a one-off `APP_STORE_CONNECT_ALLOW_WRITES=0` still overrides a file that says `true`.
 - Keys are camelCase (`keyId`, not `APP_STORE_CONNECT_KEY_ID`), `~` is expanded in `p8Path`, and `p8` takes an inline PEM as the alternative to `p8Path`.
+- `vendorNumber` is the better home for it than an MCP client config: it isn't a credential (it does nothing without your API key), but it is an account identifier, and `.mcp.json` files are usually tracked by git. Run `get_vendor_number` to see which layer a running server picked it up from.
 - `metadataRoot` sets where this machine's repos keep their listing tree — useful if you prefer `"AppStore"` to the fastlane default. It must be repo-relative; use `"."` for the repo root.
 - **Unknown keys are an error**, not ignored — a typo'd `keyID` tells you so instead of silently falling back to the environment.
 - Location: `$APP_STORE_CONNECT_CONFIG`, else `$XDG_CONFIG_HOME/appstore-connect/config.json`, else `~/.config/appstore-connect/config.json`. An absent file is fine; a malformed one is reported with its path.
@@ -245,7 +247,7 @@ A **free** app still needs a price: "free" is a price point, not the absence of 
 
 **TestFlight** — `list_beta_groups`, `list_beta_testers`, `list_beta_feedback`, _`create_beta_group`_\*, _`invite_beta_tester`_\*, _`add_tester_to_group`_\*, _`remove_tester_from_group`_\*† — an app with no group has nowhere to send a build, so `create_beta_group` is the first step of setting TestFlight up; every other tool here needs the group id it returns. Internal groups take testers who are already Users on the account and skip Beta App Review, so `hasAccessToAllBuilds` is the quickest way to make builds you have already uploaded installable.
 
-**Sales & finance reports** — `download_sales_report`, `download_finance_report` — the Sales and Trends TSVs: units, proceeds, installs by territory and install type. Needs a vendor number.
+**Sales & finance reports** — `get_vendor_number`, `download_sales_report`, `download_finance_report` — the Sales and Trends TSVs: units, proceeds, installs by territory and install type. Needs a vendor number; `get_vendor_number` reports the configured one, which layer it came from, and whether Apple accepts it.
 
 **Analytics** — `list_analytics_report_requests`, `list_analytics_reports`, `list_analytics_report_instances`, `list_analytics_report_segments`, `download_analytics_report_segment`, _`create_analytics_report_request`_\* — App Analytics proper: impressions, product page views, conversion rate, installs, deletions, sessions, retention. See [Reading analytics](#reading-analytics).
 
@@ -396,6 +398,7 @@ missing, so it can gate a release from CI.
 
 - **Tokens are minted locally.** Each request carries a fresh-enough ES256 JWT (`aud: appstoreconnect-v1`), cached and re-signed shortly before Apple's 20-minute cap. The `.p8` never leaves your machine.
 - **Reports are TSV, not JSON.** `download_sales_report` / `download_finance_report` gunzip Apple's report and return the text (truncated to `maxLines`). Reports lag ~24–48h and are keyed by date/frequency.
+- **A vendor number cannot be looked up over the API.** There is no vendor resource anywhere in the App Store Connect API, so `get_vendor_number` verifies the configured value rather than discovering one. Find yours under Payments and Financial Reports in App Store Connect, or read it out of the middle field of a report you already downloaded — Apple names them `S_<frequency>_<vendorNumber>_<date>.txt`. Apple also has no "unknown vendor" error: a number this key cannot read comes back as a bare HTTP 500, which is why a wrong one looks like an outage. Analytics reports need no vendor number at all.
 - **Analytics is asynchronous and nested.** Create the report request once, wait a day or two for Apple to generate it, then walk request → report → instance → segment to reach the rows. See [Reading analytics](#reading-analytics).
 - **`upload_screenshot` reads the file server-side.** Pass an absolute `filePath` the server can reach. Under Docker that means a path _inside_ the container — mount the folder (`-v /host/screenshots:/screenshots`) and pass the container path, or send small images inline as base64 via `fileData`.
 - **Screenshots validate after upload.** Apple checks pixel dimensions asynchronously, so a wrongly-sized image fails during processing rather than at upload; the tool waits (`waitSeconds`, default 60) and reports Apple's exact reason. Timing out is not a failure — the upload already succeeded, so poll `get_screenshot` instead of retrying. The version must be editable (`PREPARE_FOR_SUBMISSION` or `DEVELOPER_REJECTED`), and a set holds at most 10 screenshots.

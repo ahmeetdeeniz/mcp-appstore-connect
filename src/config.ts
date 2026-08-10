@@ -38,6 +38,14 @@ const ConfigSchema = z
           "Point APP_STORE_CONNECT_P8_PATH at the AuthKey_XXXX.p8 you downloaded from Apple.",
       }),
     vendorNumber: z.string().min(1).optional(),
+    /**
+     * Which layer supplied `vendorNumber`. Derived, never user-set: by the time
+     * the two sources are merged the origin is lost, and "I edited the env var
+     * and nothing changed" is the single most common way this field goes wrong
+     * — the config file silently wins nothing, but a stale file value looks
+     * identical to an env var that never got exported.
+     */
+    vendorNumberSource: z.enum(["environment", "file"]).optional(),
     allowWrites: z.boolean().default(false),
     maxRetries: z.number().int().nonnegative().max(10).default(3),
     tokenTtlSeconds: z.number().int().min(60).max(1200).default(1140),
@@ -212,11 +220,13 @@ export const loadConfig = (
   configPath: string = resolveConfigPath(env),
 ): Config => {
   const file = readConfigFile(configPath);
+  const envVendor = trimmed(env.APP_STORE_CONNECT_VENDOR_NUMBER);
   return ConfigSchema.parse({
     keyId: trimmed(env.APP_STORE_CONNECT_KEY_ID) ?? file.keyId,
     issuerId: trimmed(env.APP_STORE_CONNECT_ISSUER_ID) ?? file.issuerId,
     privateKey: resolvePrivateKey(env, file),
-    vendorNumber: trimmed(env.APP_STORE_CONNECT_VENDOR_NUMBER) ?? file.vendorNumber,
+    vendorNumber: envVendor ?? file.vendorNumber,
+    vendorNumberSource: envVendor ? "environment" : file.vendorNumber ? "file" : undefined,
     allowWrites: parseBool(env.APP_STORE_CONNECT_ALLOW_WRITES) ?? file.allowWrites,
     maxRetries: parseIntOpt(env.APP_STORE_CONNECT_MAX_RETRIES) ?? file.maxRetries,
     tokenTtlSeconds: parseIntOpt(env.APP_STORE_CONNECT_TOKEN_TTL_SECONDS) ?? file.tokenTtlSeconds,

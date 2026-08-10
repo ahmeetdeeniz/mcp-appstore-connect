@@ -40,6 +40,13 @@ const keyFile = (): string => {
   return path;
 };
 
+/** The credentials a file-only config needs, so a test can add just the field it is about. */
+const fileCredentials = (): Record<string, unknown> => ({
+  keyId: "ABCD123456",
+  issuerId: "69a6de70-0000-0000-0000-000000000000",
+  p8Path: keyFile(),
+});
+
 describe("loadConfig", () => {
   it("reads an inline PEM and applies defaults", () => {
     const config = loadConfig(baseEnv(), noConfig);
@@ -90,6 +97,26 @@ describe("loadConfig", () => {
     );
     expect(config.allowWrites).toBe(true);
     expect(config.vendorNumber).toBe("80000123");
+    expect(config.vendorNumberSource).toBe("environment");
+  });
+
+  /**
+   * The origin is lost once the two layers are merged, and "I edited the env var
+   * and nothing changed" is how this field usually goes wrong — so the layer
+   * that won has to survive the merge for get_vendor_number to report it.
+   */
+  it("tracks which layer supplied the vendor number", () => {
+    const fromFile = loadConfig({}, configFile({ ...fileCredentials(), vendorNumber: "80000123" }));
+    expect(fromFile.vendorNumberSource).toBe("file");
+
+    const envWins = loadConfig(
+      { APP_STORE_CONNECT_VENDOR_NUMBER: "85326407" },
+      configFile({ ...fileCredentials(), vendorNumber: "80000123" }),
+    );
+    expect(envWins.vendorNumber).toBe("85326407");
+    expect(envWins.vendorNumberSource).toBe("environment");
+
+    expect(loadConfig(baseEnv(), noConfig).vendorNumberSource).toBeUndefined();
   });
 
   it("rejects a private key that isn't a PEM", () => {

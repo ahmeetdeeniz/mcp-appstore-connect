@@ -24,6 +24,8 @@ export type ToolContext = {
   allowWrites: boolean;
   /** Vendor number for sales/finance reports. Reports fail with a clear error when unset. */
   vendorNumber?: string | undefined;
+  /** Which config layer supplied `vendorNumber`, reported by get_vendor_number. */
+  vendorNumberSource?: "environment" | "file" | undefined;
   /**
    * Where this repo keeps its metadata tree, already normalized. Baked into the
    * listing tool descriptions at registration time, which is the only channel
