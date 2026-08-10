@@ -112,12 +112,24 @@ single consolidated figure is genuinely needed, that is what
 actually paid, per fiscal month and region.
 
 **`Units` mixes purchases with free updates.** `Product Type Identifier`
-separates them: codes starting `1` are first-time downloads or purchases, `7` is
-an update, `F` prefixes Mac, `IA` prefixes in-app purchases. A version release
-floods the report with type-`7` rows, so an unfiltered unit count spikes on
-release day and looks like a sales surge. Split by `Product Type Identifier`
-before quoting units. Rather than trusting this list, check the distinct values
-in the file — Apple adds codes, and `summary` lists them.
+separates them, and **the first thing to do is list the distinct values in the
+file** — `summary` reports them under `groupable`. Apple adds codes, and the
+platform decides whether the digit leads or trails, so reading the actual values
+beats reasoning from any table including this one:
+
+| Code                   | Means                                               |
+| ---------------------- | --------------------------------------------------- |
+| `1F` / `7F`            | iOS: first-time download / update (digit first)     |
+| `F1` / `F7`            | macOS: first-time download / update (`F` first)     |
+| `F3`                   | macOS redownload — neither a new user nor an update |
+| `IA1` (`IA1-M` on Mac) | in-app purchase                                     |
+
+The `1`-versus-`7` digit is the part that matters: `1` is a first-time download or
+purchase, `7` is a free update. Everything else is platform decoration. A version
+release floods the report with `7` rows, so an unfiltered unit count spikes on
+release day and looks like a sales surge — it is the existing base updating. Split
+by `Product Type Identifier` before quoting units, and quote the `1` rows when the
+question is acquisition.
 
 ## Why the numbers disagree
 

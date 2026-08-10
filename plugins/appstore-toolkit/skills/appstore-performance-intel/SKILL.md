@@ -9,6 +9,13 @@ This answers one question with real data: **what are the numbers doing, and
 why?** It reads App Store Connect, does the arithmetic in a script rather than
 by eye, and writes a dated report you can diff against last month's.
 
+**Every run has two deliverables, and neither substitutes for the other:** the
+dated markdown file, and a summary of it in the conversation. A file path alone
+makes the user open a document to learn whether anything is wrong; a chat-only
+answer leaves nothing to diff next month. Step 6 specifies the summary — it is
+not a sign-off line, it is the report's findings rendered for someone who will
+not open the file.
+
 The failure modes here are specific and they are why the skill exists. People
 quote a truncated report as a total. They sum a per-unit money column and
 understate revenue by a hundred times. They add euros to yen. They call a
@@ -51,10 +58,24 @@ and "recently" is not a window at all. Resolve it to explicit dates, say them in
 the report, and use the same window for every report you pull — a funnel built
 from two different windows is not a funnel.
 
-Then get the release dates: `app_store_connect_list_versions` gives version
-strings and dates. These are the join that makes the whole report useful. A
-metric that moved is interesting; a metric that moved the day 2.1 shipped is an
-explanation.
+**The release dates, which you have to derive rather than read.**
+`app_store_connect_list_versions` is the starting point, but be exact about what
+it returns: `createdDate` is when the **version record** was created, not when
+the build went live, and `earliestReleaseDate` is null unless a scheduled release
+was set. There is no release-date field. The gap is routinely days — a version
+created on the 2nd, approved and released on the 4th — and since step 4 hangs
+every attribution off these dates, using `createdDate` as the release date is how
+a report confidently credits a movement to the wrong version.
+
+Pin it properly: `createdDate` is the **earliest** the version could have
+shipped, and the version's first appearance in a DAILY sales report is the latest
+it could have. When a release matters to the argument, pull the dailies around
+`createdDate` and quote the first date its `Version` value actually appears. If
+you only have monthly data, say "released mid-July per the version record" rather
+than naming a day you did not verify.
+
+A metric that moved is interesting; a metric that moved the day 2.1 shipped is an
+explanation — but only if that really was the day.
 
 ## 2. Pull the numbers
 
@@ -212,14 +233,21 @@ If none of them holds, say the movement is unexplained. An honest "down 19% and
 I can't attribute it" is worth more than a confident guess, and it tells the
 user where to look next.
 
+Distinguish "measured, cause unknown" from "not measured". A magnitude confirmed
+by the script with no attributable cause is a finding, and worth stating as one.
+
 Do not assert a cause you did not measure. The tell is a sentence where a
 metric's fall is explained by something with no number attached to it.
 
 ## 5. Write the report
 
 Write to `<docs-dir>/performance/<YYYY-MM-DD>-performance.md` — alongside
-whatever documentation directory the repo already uses, creating it if needed.
-When there is no repo, ask where it should go rather than inventing a path.
+whatever documentation directory the repo already uses, creating it if needed. If
+the repo has no documentation directory at all (common on app repos that keep
+only `CHANGELOG.md` and a listing tree), do not go hunting across sibling repos
+or invent a novel location: create `docs/performance/` at the root of the repo
+the app lives in, and say in the summary that you created it. Only ask when there
+is no repo to put it in.
 
 Use this shape:
 
@@ -237,7 +265,12 @@ Tables from the script. Every figure labelled with the report it came from.
 ## Funnel
 
 Impressions → product page views → downloads, with conversion stated as a
-division and both sources named. Say when a stage is unavailable.
+division and both sources named. Say when a stage is unavailable — and when the
+app has no analytics request, say the stronger thing: the conversion rate **does
+not exist for this window and cannot be computed**, because its numerator was
+never collected. That is not the same as "unavailable", and it is worth spelling
+out, because a rate quoted for this app in the past cannot have come from
+measurement.
 
 ## What changed and why
 
@@ -264,8 +297,36 @@ new three times running.
 
 Do not commit anything unless asked.
 
-## 6. Report back
+## 6. Summarise it in the conversation
 
-Give the user the headline and the path. Repeat the Gaps section in the chat —
-what you could not measure is the part they most need to see, and it is the part
-that gets lost when only a file path is handed over.
+The file is half the deliverable. Now write the summary in chat — assume the user
+will read only this and never open the file, and that they should still come away
+knowing what moved, what it means, and what you could not see.
+
+Do not paste the report. Re-render it, tighter:
+
+- **The path**, once, plus whether you created the directory and whether you
+  committed (default: you did not).
+- **The headline**, in prose — what moved, by how much, over which explicit
+  dates. Lead with the corrected reading, not the raw one: if units rose 1600%
+  but three-quarters of that is a free-update flood, the headline is the flood,
+  with the real acquisition number next to it. Never open with a figure you go on
+  to debunk.
+- **The two or three findings that carry weight**, each with its number attached.
+  Something flat can outrank something that moved: revenue unchanged across an 8×
+  rise in installs is a bigger finding than the rise.
+- **The Gaps section, in full.** This is the one part that is repeated rather than
+  compressed, because what could not be measured is exactly what gets lost when a
+  path is handed over — and a reader who does not know the funnel was missing will
+  read the whole summary as more complete than it is. Include the sample sizes
+  here when they are small enough to make percentages misleading.
+- **Anything you wrote to the account**, with ids, if the run created an analytics
+  report request or any other write.
+
+Keep it scannable — short prose plus a bulleted Gaps list beats a wall of
+sentences. Skip the tables; they are what the file is for.
+
+Two things not to do. Do not restate the headline number three times in different
+units, and do not close by offering next steps the skill has no mandate for —
+feature and competitive strategy belong to `app-market-intel`, so name the handoff
+and stop.
