@@ -56,6 +56,49 @@ const assertPricePointBelongs = async (
   );
 };
 
+/**
+ * Flatten a price schedule's `manualPrices` into rows that carry the actual money.
+ *
+ * An `appPrice` / `inAppPurchasePrice` has almost no attributes of its own: the
+ * amount lives on the related price point and the territory on a related
+ * territory, so both are reachable only by sideloading. Ask for `manualPrices`
+ * alone — as this did — and Apple returns neither relationship, `relatedId`
+ * yields `undefined` at every hop, and `JSON.stringify` drops undefined keys, so
+ * `territory` and `pricePointId` do not come back *absent*, they come back
+ * invisible. The result is a price schedule that answers "what does this app
+ * cost" with an opaque id and nothing else, leaving the caller to base64-decode
+ * the id or page hundreds of price points to find out that the app is free.
+ *
+ * Inlining `customerPrice` and `proceeds` from the sideloaded price point makes
+ * the one call that claims to answer the question actually answer it.
+ */
+export const manualPriceRows = (
+  response: unknown,
+  priceType: string,
+  pricePointRelationship: string,
+  pricePointType: string,
+): Record<string, unknown>[] => {
+  const pricePoints = new Map<string, Record<string, unknown>>();
+  for (const point of includedOf(response, pricePointType)) {
+    if (typeof point.id === "string") pricePoints.set(point.id, attributesOf(point));
+  }
+
+  return includedOf(response, priceType).map((price) => {
+    const pricePointId = relatedId(price, pricePointRelationship);
+    const point = pricePointId === undefined ? undefined : pricePoints.get(pricePointId);
+    return {
+      id: price.id,
+      ...attributesOf(price),
+      ...compact({
+        territory: relatedId(price, "territory"),
+        pricePointId,
+        customerPrice: point?.customerPrice,
+        proceeds: point?.proceeds,
+      }),
+    };
+  });
+};
+
 export const registerPricingTools = (
   server: McpServer,
   client: AppStoreConnectClient,
@@ -95,8 +138,9 @@ export const registerPricingTools = (
     {
       description:
         "Show what an app currently costs: its base territory and every manual price in force, " +
-        "each with the price point behind it and its start/end date. A null result means the app " +
-        "has never been priced, which blocks submission — this is the check for " +
+        "each with its territory, its customerPrice and proceeds, and its start/end date. A " +
+        "customerPrice of 0 is how a free app is priced. A null result means the app has never " +
+        "been priced, which blocks submission — this is the check for " +
         "STATE_ERROR.APP_PRICING_REQUIRED.",
       inputSchema: { appId: appIdArg },
       annotations: { readOnlyHint: true },
@@ -105,9 +149,10 @@ export const registerPricingTools = (
       wrap(async () => {
         // The schedule resource carries nothing but relationships, so the prices
         // only exist in `included` — summarizeResponse alone would return an id
-        // and no prices at all.
+        // and no prices at all. The nested includes are what make each price
+        // legible; see manualPriceRows.
         const response = await getOrNull(client, `/v1/apps/${appId}/appPriceSchedule`, {
-          include: "manualPrices,baseTerritory",
+          include: "manualPrices.appPricePoint,manualPrices.territory,baseTerritory",
         });
         if (response === null) {
           return {
@@ -122,12 +167,7 @@ export const registerPricingTools = (
         return {
           scheduleId: schedule.id,
           baseTerritory: relatedId(schedule, "baseTerritory"),
-          manualPrices: includedOf(response, "appPrices").map((price) => ({
-            id: price.id,
-            ...attributesOf(price),
-            territory: relatedId(price, "territory"),
-            pricePointId: relatedId(price, "appPricePoint"),
-          })),
+          manualPrices: manualPriceRows(response, "appPrices", "appPricePoint", "appPricePoints"),
         };
       }),
   );

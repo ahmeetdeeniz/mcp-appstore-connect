@@ -6,7 +6,6 @@ import { z } from "zod";
 import type { AppStoreConnectClient, UploadOperation } from "../client/asc.js";
 import {
   attributesOf,
-  includedOf,
   relatedId,
   resourceOf,
   resourcesOf,
@@ -17,6 +16,7 @@ import {
 // envelope. Aliased rather than imported bare so the two cannot be swapped by a
 // tidy-up.
 import { attributesOf as envelopeAttributes, idOf, pollAssetState, readImage } from "./assets.js";
+import { manualPriceRows } from "./pricing.js";
 import {
   PreconditionError,
   appIdArg,
@@ -183,8 +183,8 @@ export const registerIapTools = (
     {
       description:
         "Show what an in-app purchase currently costs: its base territory and every manual price " +
-        "in force, each with the price point behind it and its start/end date. An empty price " +
-        "list means the IAP has never been priced.",
+        "in force, each with its territory, its customerPrice and proceeds, and its start/end " +
+        "date. An empty price list means the IAP has never been priced.",
       inputSchema: { inAppPurchaseId: inAppPurchaseIdArg },
       annotations: { readOnlyHint: true },
     },
@@ -192,11 +192,14 @@ export const registerIapTools = (
       wrap(async () => {
         // The schedule resource carries nothing but relationships, so the prices
         // only exist in `included` — summarizeResponse alone would return an id
-        // and no prices at all.
+        // and no prices at all. The nested includes are what make each price
+        // legible; see manualPriceRows.
         const response = await getOrNull(
           client,
           `/v2/inAppPurchases/${inAppPurchaseId}/iapPriceSchedule`,
-          { include: "manualPrices,baseTerritory" },
+          {
+            include: "manualPrices.inAppPurchasePricePoint,manualPrices.territory,baseTerritory",
+          },
         );
         if (response === null) {
           return { data: null, note: "This in-app purchase has never been priced." };
@@ -206,12 +209,12 @@ export const registerIapTools = (
         return {
           scheduleId: schedule.id,
           baseTerritory: relatedId(schedule, "baseTerritory"),
-          manualPrices: includedOf(response, "inAppPurchasePrices").map((price) => ({
-            id: price.id,
-            ...attributesOf(price),
-            territory: relatedId(price, "territory"),
-            pricePointId: relatedId(price, "inAppPurchasePricePoint"),
-          })),
+          manualPrices: manualPriceRows(
+            response,
+            "inAppPurchasePrices",
+            "inAppPurchasePricePoint",
+            "inAppPurchasePricePoints",
+          ),
         };
       }),
   );
