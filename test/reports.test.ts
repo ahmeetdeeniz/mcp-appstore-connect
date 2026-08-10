@@ -12,10 +12,10 @@ import { previewReport } from "../src/tools/reports.js";
  * The behaviour is reachable through a tool call, but only via a gzip round
  * trip that obscures which byte caused which count. These drive the function.
  */
-describe("previewReport", () => {
-  const header = "Provider\tSKU\tUnits";
-  const row = (units: number): string => `APPLE\tD1EXPLORER\t${units}`;
+const header = "Provider\tSKU\tUnits";
+const row = (units: number): string => `APPLE\tD1EXPLORER\t${units}`;
 
+describe("previewReport", () => {
   it("does not count Apple's trailing newline as a row", () => {
     // Apple terminates every report with a newline. Counting it would report
     // three rows for a two-row file.

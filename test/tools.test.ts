@@ -1666,24 +1666,24 @@ describe("download_sales_report per-app filter", () => {
   });
 });
 
+const analyticsRequest = (id: string, accessType: string): unknown => ({
+  id,
+  type: "analyticsReportRequests",
+  attributes: { accessType, stoppedDueToInactivity: false },
+});
+const analyticsReport = (id: string, category: string): unknown => ({
+  id,
+  type: "analyticsReports",
+  attributes: { name: `Report ${id}`, category },
+});
+const analyticsInstance = (id: string, processingDate: string): unknown => ({
+  id,
+  type: "analyticsReportInstances",
+  attributes: { granularity: "DAILY", processingDate },
+});
+
 describe("get_analytics_status", () => {
   const APP_ID = "1234567890";
-
-  const request = (id: string, accessType: string): unknown => ({
-    id,
-    type: "analyticsReportRequests",
-    attributes: { accessType, stoppedDueToInactivity: false },
-  });
-  const report = (id: string, category: string): unknown => ({
-    id,
-    type: "analyticsReports",
-    attributes: { name: `Report ${id}`, category },
-  });
-  const instance = (id: string, processingDate: string): unknown => ({
-    id,
-    type: "analyticsReportInstances",
-    attributes: { granularity: "DAILY", processingDate },
-  });
 
   /** Routes the three hops of the walk by pathname, as Apple lays them out. */
   const walk = (opts: {
@@ -1718,11 +1718,20 @@ describe("get_analytics_status", () => {
   it("answers the whole walk — requests, reports, instances, earliest date — in one call", async () => {
     const body = await status(
       walk({
-        requests: [request("req-1", "ONGOING"), request("req-2", "ONE_TIME_SNAPSHOT")],
-        reports: [report("rep-1", "APP_STORE_ENGAGEMENT"), report("rep-2", "APP_USAGE")],
+        requests: [
+          analyticsRequest("req-1", "ONGOING"),
+          analyticsRequest("req-2", "ONE_TIME_SNAPSHOT"),
+        ],
+        reports: [
+          analyticsReport("rep-1", "APP_STORE_ENGAGEMENT"),
+          analyticsReport("rep-2", "APP_USAGE"),
+        ],
         instances: {
-          "rep-1": [instance("ins-1", "2026-06-02"), instance("ins-2", "2026-06-01")],
-          "rep-2": [instance("ins-3", "2026-07-15")],
+          "rep-1": [
+            analyticsInstance("ins-1", "2026-06-02"),
+            analyticsInstance("ins-2", "2026-06-01"),
+          ],
+          "rep-2": [analyticsInstance("ins-3", "2026-07-15")],
         },
       }),
     );
@@ -1749,13 +1758,13 @@ describe("get_analytics_status", () => {
    */
   it("excludes FRAMEWORK_USAGE by default and says how much it removed", async () => {
     const fetchImpl = walk({
-      requests: [request("req-1", "ONGOING")],
+      requests: [analyticsRequest("req-1", "ONGOING")],
       reports: [
-        report("rep-1", "APP_STORE_ENGAGEMENT"),
-        report("rep-2", "FRAMEWORK_USAGE"),
-        report("rep-3", "FRAMEWORK_USAGE"),
+        analyticsReport("rep-1", "APP_STORE_ENGAGEMENT"),
+        analyticsReport("rep-2", "FRAMEWORK_USAGE"),
+        analyticsReport("rep-3", "FRAMEWORK_USAGE"),
       ],
-      instances: { "rep-1": [instance("ins-1", "2026-06-01")] },
+      instances: { "rep-1": [analyticsInstance("ins-1", "2026-06-01")] },
     });
 
     const body = await status(fetchImpl);
@@ -1764,8 +1773,11 @@ describe("get_analytics_status", () => {
 
     const kept = await status(
       walk({
-        requests: [request("req-1", "ONGOING")],
-        reports: [report("rep-1", "APP_STORE_ENGAGEMENT"), report("rep-2", "FRAMEWORK_USAGE")],
+        requests: [analyticsRequest("req-1", "ONGOING")],
+        reports: [
+          analyticsReport("rep-1", "APP_STORE_ENGAGEMENT"),
+          analyticsReport("rep-2", "FRAMEWORK_USAGE"),
+        ],
       }),
       { includeFrameworkUsage: true },
     );
@@ -1781,8 +1793,11 @@ describe("get_analytics_status", () => {
   it("separates reports existing from instances holding anything", async () => {
     const body = await status(
       walk({
-        requests: [request("req-1", "ONGOING"), request("req-2", "ONE_TIME_SNAPSHOT")],
-        reports: [report("rep-1", "APP_USAGE")],
+        requests: [
+          analyticsRequest("req-1", "ONGOING"),
+          analyticsRequest("req-2", "ONE_TIME_SNAPSHOT"),
+        ],
+        reports: [analyticsReport("rep-1", "APP_USAGE")],
         instances: {},
       }),
     );
@@ -1812,18 +1827,21 @@ describe("get_analytics_status", () => {
   it("warns when only ONGOING exists, because the past is being lost", async () => {
     const withOngoingOnly = await status(
       walk({
-        requests: [request("req-1", "ONGOING")],
-        reports: [report("rep-1", "APP_USAGE")],
-        instances: { "rep-1": [instance("ins-1", "2026-06-01")] },
+        requests: [analyticsRequest("req-1", "ONGOING")],
+        reports: [analyticsReport("rep-1", "APP_USAGE")],
+        instances: { "rep-1": [analyticsInstance("ins-1", "2026-06-01")] },
       }),
     );
     expect(String(withOngoingOnly.historyWarning)).toContain("backfills nothing");
 
     const withSnapshot = await status(
       walk({
-        requests: [request("req-1", "ONGOING"), request("req-2", "ONE_TIME_SNAPSHOT")],
-        reports: [report("rep-1", "APP_USAGE")],
-        instances: { "rep-1": [instance("ins-1", "2026-06-01")] },
+        requests: [
+          analyticsRequest("req-1", "ONGOING"),
+          analyticsRequest("req-2", "ONE_TIME_SNAPSHOT"),
+        ],
+        reports: [analyticsReport("rep-1", "APP_USAGE")],
+        instances: { "rep-1": [analyticsInstance("ins-1", "2026-06-01")] },
       }),
     );
     expect(withSnapshot.historyWarning).toBeUndefined();
@@ -1837,11 +1855,11 @@ describe("get_analytics_status", () => {
   it("never lets a capped probe read as a total", async () => {
     const body = await status(
       walk({
-        requests: [request("req-1", "ONE_TIME_SNAPSHOT")],
-        reports: [report("rep-1", "APP_USAGE"), report("rep-2", "COMMERCE")],
+        requests: [analyticsRequest("req-1", "ONE_TIME_SNAPSHOT")],
+        reports: [analyticsReport("rep-1", "APP_USAGE"), analyticsReport("rep-2", "COMMERCE")],
         instances: {
-          "rep-1": [instance("ins-1", "2026-06-01")],
-          "rep-2": [instance("ins-2", "2026-06-02")],
+          "rep-1": [analyticsInstance("ins-1", "2026-06-01")],
+          "rep-2": [analyticsInstance("ins-2", "2026-06-02")],
         },
       }),
       { maxReportsProbed: 1 },
@@ -1854,8 +1872,8 @@ describe("get_analytics_status", () => {
 
   it("passes a category filter through to Apple rather than filtering locally", async () => {
     const fetchImpl = walk({
-      requests: [request("req-1", "ONGOING")],
-      reports: [report("rep-1", "COMMERCE")],
+      requests: [analyticsRequest("req-1", "ONGOING")],
+      reports: [analyticsReport("rep-1", "COMMERCE")],
     });
     await status(fetchImpl, { category: "COMMERCE" });
 
