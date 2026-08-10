@@ -247,9 +247,9 @@ A **free** app still needs a price: "free" is a price point, not the absence of 
 
 **TestFlight** — `list_beta_groups`, `list_beta_testers`, `list_beta_feedback`, _`create_beta_group`_\*, _`invite_beta_tester`_\*, _`add_tester_to_group`_\*, _`remove_tester_from_group`_\*† — an app with no group has nowhere to send a build, so `create_beta_group` is the first step of setting TestFlight up; every other tool here needs the group id it returns. Internal groups take testers who are already Users on the account and skip Beta App Review, so `hasAccessToAllBuilds` is the quickest way to make builds you have already uploaded installable.
 
-**Sales & finance reports** — `get_vendor_number`, `download_sales_report`, `download_finance_report` — the Sales and Trends TSVs: units, proceeds, installs by territory and install type. Needs a vendor number; `get_vendor_number` reports the configured one, which layer it came from, and whether Apple accepts it.
+**Sales & finance reports** — `get_vendor_number`, `download_sales_report`, `download_finance_report` — the Sales and Trends TSVs: units, proceeds, installs by territory and install type. Needs a vendor number; `get_vendor_number` reports the configured one, which layer it came from, and whether Apple accepts it. The sales report is account-wide and Apple offers no per-app filter, so pass `appleIdentifier` or `sku` to have the server apply one after download — it runs before `maxLines`, so truncation counts the app you asked about rather than an arbitrary slice of the portfolio, and the dropped row count comes back with it. **`download_finance_report` takes a _fiscal_ period, not a calendar one:** Apple's fiscal year opens in late September and its months are 4-4-5 weeks, so `2026-07` is fiscal month 7 of FY2026 — roughly late March to early May. Getting this wrong is silent, because a well-formed report comes back either way, so the response carries a `coverage` block with the start and end dates the report actually covers. Check it before quoting any figure.
 
-**Analytics** — `list_analytics_report_requests`, `list_analytics_reports`, `list_analytics_report_instances`, `list_analytics_report_segments`, `download_analytics_report_segment`, _`create_analytics_report_request`_\* — App Analytics proper: impressions, product page views, conversion rate, installs, deletions, sessions, retention. See [Reading analytics](#reading-analytics).
+**Analytics** — `get_analytics_status`, `list_analytics_report_requests`, `list_analytics_reports`, `list_analytics_report_instances`, `list_analytics_report_segments`, `download_analytics_report_segment`, _`create_analytics_report_request`_\* — App Analytics proper: impressions, product page views, conversion rate, installs, deletions, sessions, retention. `get_analytics_status` walks the whole chain in one call and answers "is there any data yet, and how far back does it go" — reach for it before the four-step walk, especially just after enabling analytics, since reports exist as soon as Apple registers them but hold nothing until instances appear a day or two later. See [Reading analytics](#reading-analytics).
 
 **Customer reviews** — `list_customer_reviews` — star rating, title, body, territory and date, newest first; filter by rating to read just the complaints. These are **written** reviews only. Most people rate without writing, and Apple exposes no aggregate star average here, so a distribution computed from these is directional — it is not the App Store rating.
 
@@ -338,12 +338,22 @@ analyticsReportRequest   one per app, created once, then reused forever
             └─ segment   the gzipped CSV that holds the rows
 ```
 
+`get_analytics_status` collapses the whole walk into one call — request, report and instance
+counts plus the earliest instance date — and is the right first move when the question is
+simply whether there is any data yet. The four hops below are for reaching the numbers
+themselves.
+
 One tool per hop, in order:
 
 1. `create_analytics_report_request` — **once per app**, and only if there isn't one
    already. Apple rejects a second `ONGOING` request, so run
-   `list_analytics_report_requests` first and reuse the id it returns. `ONE_TIME_SNAPSHOT`
-   backfills roughly the last 52 weeks; `ONGOING` keeps producing new instances.
+   `list_analytics_report_requests` first and reuse the id it returns. **Create both access
+   types.** `ONE_TIME_SNAPSHOT` is the only way to obtain history — it covers roughly the
+   last 52 weeks as of when it is created, and that window rolls forward, so history no
+   snapshot captured is gone permanently and no later request can recover it. `ONGOING`
+   collects from now on and backfills nothing. Creating only `ONGOING` therefore forfeits
+   the app's entire past, and the loss is invisible: next month looks healthy because it has
+   data, while the year before it no longer exists.
 2. `list_analytics_reports` — filter by `category`: `APP_STORE_ENGAGEMENT` for impressions,
    product page views and conversion rate; `APP_USAGE` for installs, deletions, sessions and
    retention; `COMMERCE` for sales and proceeds.
@@ -399,7 +409,8 @@ missing, so it can gate a release from CI.
 - **Tokens are minted locally.** Each request carries a fresh-enough ES256 JWT (`aud: appstoreconnect-v1`), cached and re-signed shortly before Apple's 20-minute cap. The `.p8` never leaves your machine.
 - **Reports are TSV, not JSON.** `download_sales_report` / `download_finance_report` gunzip Apple's report and return the text (truncated to `maxLines`). Reports lag ~24–48h and are keyed by date/frequency.
 - **A vendor number cannot be looked up over the API.** There is no vendor resource anywhere in the App Store Connect API, so `get_vendor_number` verifies the configured value rather than discovering one. Find yours under Payments and Financial Reports in App Store Connect, or read it out of the middle field of a report you already downloaded — Apple names them `S_<frequency>_<vendorNumber>_<date>.txt`. Apple also has no "unknown vendor" error: a number this key cannot read comes back as a bare HTTP 500, which is why a wrong one looks like an outage. Analytics reports need no vendor number at all.
-- **Analytics is asynchronous and nested.** Create the report request once, wait a day or two for Apple to generate it, then walk request → report → instance → segment to reach the rows. See [Reading analytics](#reading-analytics).
+- **Finance reports are keyed by fiscal month, not calendar month.** Apple's fiscal year opens in late September and its months run 4-4-5 weeks, so `reportDate: "2026-07"` returns fiscal month 7 of FY2026 — roughly 29 March to 2 May 2026. Nothing rejects a calendar month, because every well-formed period is a valid request, so the mistake surfaces as a plausible report for a period you did not choose. `download_finance_report` returns a `coverage` block with the real start and end dates read out of the report body; read it before quoting a number. Sales reports are unaffected — those are keyed by ordinary calendar dates.
+- **Analytics is asynchronous and nested.** Create the report request once, wait a day or two for Apple to generate it, then walk request → report → instance → segment to reach the rows — or call `get_analytics_status` to check whether there is anything to walk. See [Reading analytics](#reading-analytics).
 - **`upload_screenshot` reads the file server-side.** Pass an absolute `filePath` the server can reach. Under Docker that means a path _inside_ the container — mount the folder (`-v /host/screenshots:/screenshots`) and pass the container path, or send small images inline as base64 via `fileData`.
 - **Screenshots validate after upload.** Apple checks pixel dimensions asynchronously, so a wrongly-sized image fails during processing rather than at upload; the tool waits (`waitSeconds`, default 60) and reports Apple's exact reason. Timing out is not a failure — the upload already succeeded, so poll `get_screenshot` instead of retrying. The version must be editable (`PREPARE_FOR_SUBMISSION` or `DEVELOPER_REJECTED`), and a set holds at most 10 screenshots.
 - **Screenshot order is explicit.** `reorder_screenshots` replaces a set's full contents, so pass every id you want to keep — an omitted one is removed from the set.

@@ -3,7 +3,7 @@ import { z } from "zod";
 
 import type { AppStoreConnectClient } from "../client/asc.js";
 import { AppStoreConnectApiError } from "../client/errors.js";
-import { attributesOf, resourcesOf, summarizeResponse } from "../client/shape.js";
+import { attributesOf, type Rec, resourcesOf, summarizeResponse } from "../client/shape.js";
 import type { ToolContext } from "./index.js";
 import { appIdArg, compact, limitArg, PreconditionError, wrap } from "./util.js";
 
@@ -48,8 +48,11 @@ const SALES_REPORT_TYPES = [
  * `report_stats.py` treats truncation as a hard error precisely so a floor is
  * never quoted as a total, so a false flag makes it refuse a file that lost
  * nothing.
+ *
+ * Exported for direct unit testing: the trailing-newline rule is the kind of
+ * off-by-one that a round-trip through a tool call can mask.
  */
-const previewReport = (tsv: string, maxLines: number): Record<string, unknown> => {
+export const previewReport = (tsv: string, maxLines: number): Record<string, unknown> => {
   const lines = tsv.split("\n");
   let count = lines.length;
   while (count > 0 && lines[count - 1] === "") count -= 1;
@@ -70,6 +73,149 @@ const previewReport = (tsv: string, maxLines: number): Record<string, unknown> =
     // Untruncated output is handed back byte-for-byte. Only the sliced path
     // drops the trailing newline, and there the text is already partial.
     report: truncated ? lines.slice(0, maxLines).join("\n") : tsv,
+  };
+};
+
+/**
+ * Split a report into its header line and data lines, discarding the trailing
+ * blank Apple leaves behind. Shares `previewReport`'s rule about that newline so
+ * a row count taken here cannot disagree with the one reported there.
+ */
+const splitReport = (tsv: string): { header: string; rows: string[] } | undefined => {
+  const lines = tsv.split("\n");
+  let count = lines.length;
+  while (count > 0 && lines[count - 1] === "") count -= 1;
+  if (count === 0) return undefined;
+  return { header: lines[0] as string, rows: lines.slice(1, count) };
+};
+
+const columnIndexes = (header: string): Map<string, number> =>
+  new Map(header.split("\t").map((name, index) => [name.trim(), index] as const));
+
+const cellAt = (row: string, index: number): string => row.split("\t")[index]?.trim() ?? "";
+
+/** `03/29/2026` -> `2026-03-29`; anything else is handed back untouched. */
+const isoDate = (value: string): string => {
+  const match = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(value);
+  return match ? `${match[3]}-${match[1]}-${match[2]}` : value;
+};
+
+/**
+ * Read the period a finance report actually covers out of its own rows.
+ *
+ * Apple keys finance reports by *fiscal* period, and its fiscal months are 4-4-5
+ * weeks against a year that opens in late September — so `2026-07` is fiscal
+ * month 7 of FY2026, roughly late March to early May, not July. Nothing in the
+ * request says so and nothing in the response headline says so either, which
+ * makes asking for the wrong quarter completely silent: a well-formed report
+ * comes back, for a period nobody chose.
+ *
+ * The TSV carries `Start Date` and `End Date` on every row, so the answer is
+ * already in the file. Surfacing it turns a trap that depends on knowing Apple's
+ * fiscal calendar into a fact the caller can read off the result.
+ *
+ * Deliberately forgiving: finance reports are multi-section, and a shape this
+ * does not recognise must return nothing rather than throw or guess. A missing
+ * `coverage` costs a caller the convenience; a wrong one costs them the report.
+ */
+const financeCoverage = (tsv: string): { startDate: string; endDate: string } | undefined => {
+  const lines = tsv.split("\n");
+  const headerIndex = lines.findIndex(
+    (line) => line.includes("Start Date") && line.includes("End Date"),
+  );
+  if (headerIndex === -1) return undefined;
+
+  const columns = columnIndexes(lines[headerIndex] as string);
+  const start = columns.get("Start Date");
+  const end = columns.get("End Date");
+  if (start === undefined || end === undefined) return undefined;
+
+  const row = lines.slice(headerIndex + 1).find((line) => line.trim() !== "");
+  if (row === undefined) return undefined;
+
+  const startDate = cellAt(row, start);
+  const endDate = cellAt(row, end);
+  if (startDate === "" || endDate === "") return undefined;
+  return { startDate: isoDate(startDate), endDate: isoDate(endDate) };
+};
+
+/** The sales TSV columns identifying an app, named as Apple spells them. */
+const SALES_FILTER_COLUMNS = {
+  appleIdentifier: "Apple Identifier",
+  sku: "SKU",
+} as const;
+
+type SalesFilter = { appleIdentifier?: string; sku?: string };
+
+/**
+ * Keep only the rows belonging to one app, before anything is truncated.
+ *
+ * Apple has no per-app filter on the sales endpoint, so the TSV is account-wide:
+ * every app the vendor ships, interleaved rather than grouped. Two things go
+ * wrong when the caller filters it by eye afterwards. The obvious one is
+ * quoting a portfolio total as one app's. The subtler one is that `maxLines`
+ * then truncates across the interleaving, so a dropped tail removes an
+ * arbitrary slice of *every* app — `truncated: true` says something was lost
+ * but not that one app vanished from it entirely.
+ *
+ * Filtering here fixes both: the limit applies to the rows that were asked for,
+ * so `truncated` means what it says, and the dropped count is reported rather
+ * than left to be inferred.
+ */
+const filterSalesReport = (
+  tsv: string,
+  filter: SalesFilter,
+): {
+  tsv: string;
+  matchedRows: number;
+  droppedRows: number;
+  availableColumn: string;
+  available: string[];
+} => {
+  const split = splitReport(tsv);
+  if (split === undefined) {
+    return { tsv, matchedRows: 0, droppedRows: 0, availableColumn: "", available: [] };
+  }
+  const { header, rows } = split;
+  const columns = columnIndexes(header);
+
+  const wanted = Object.entries(SALES_FILTER_COLUMNS)
+    .map(([key, column]) => ({ key, column, value: filter[key as keyof SalesFilter] }))
+    .filter((entry) => entry.value !== undefined && entry.value !== "");
+
+  // A filter the report cannot honour must fail loudly. Ignoring it would hand
+  // back the whole portfolio under a name that claims one app — precisely the
+  // mistake this argument exists to prevent.
+  const missing = wanted.filter((entry) => !columns.has(entry.column));
+  if (missing.length > 0) {
+    throw new PreconditionError(
+      `This report has no ${missing.map((entry) => `"${entry.column}"`).join(" or ")} column, so ` +
+        `it cannot be filtered by app. Summary reports carry it; some reportType / reportSubType ` +
+        `combinations do not. Columns present: ${[...columns.keys()].join(", ")}.`,
+      { columns: [...columns.keys()] },
+    );
+  }
+
+  const matched = rows.filter((row) =>
+    wanted.every((entry) => cellAt(row, columns.get(entry.column) as number) === entry.value),
+  );
+
+  // Only computed for the empty result, where naming the values actually present
+  // is what distinguishes a typo from a report for the wrong account.
+  const probe = wanted[0];
+  const available =
+    matched.length === 0 && probe !== undefined
+      ? [...new Set(rows.map((row) => cellAt(row, columns.get(probe.column) as number)))]
+          .filter((value) => value !== "")
+          .slice(0, 25)
+      : [];
+
+  return {
+    tsv: [header, ...matched].join("\n") + "\n",
+    matchedRows: matched.length,
+    droppedRows: rows.length - matched.length,
+    availableColumn: probe?.column ?? "",
+    available,
   };
 };
 
@@ -111,9 +257,18 @@ const withVendorHint = async <T>(vendor: string, fn: () => Promise<T>): Promise<
  * ended can 404 while every day inside it has sales — and "no sales" versus "not
  * computed yet" are opposite conclusions about the same response. The caller
  * cannot tell them apart from the status code, so the message names the check
- * that can: ask for a finer granularity over the same span.
+ * that can.
+ *
+ * That check differs by report, which is why the remedy is a parameter. Sales
+ * reports can be re-asked at a finer granularity; finance reports have no
+ * granularity at all, so telling their caller to "re-ask at DAILY" names an
+ * argument that tool does not have.
  */
-const withEmptyPeriodHint = async <T>(period: string, fn: () => Promise<T>): Promise<T> => {
+const withEmptyPeriodHint = async <T>(
+  period: string,
+  remedy: string,
+  fn: () => Promise<T>,
+): Promise<T> => {
   try {
     return await fn();
   } catch (err) {
@@ -121,18 +276,35 @@ const withEmptyPeriodHint = async <T>(period: string, fn: () => Promise<T>): Pro
       throw new AppStoreConnectApiError(
         `Apple returned no rows for ${period}. This is how it reports a period with no ` +
           `activity — including dates before the app shipped — so it is an answer, not a ` +
-          `fault, and the vendor number and credentials are fine. Before recording a zero, ` +
-          `note that Apple returns this same 404 for a period it has not generated yet: ` +
-          `weekly and monthly reports are assembled after the dailies, so a recently ended ` +
-          `week can 404 while the days inside it have sales. Re-ask at DAILY granularity ` +
-          `across the same span — sales in the dailies mean this is reporting lag and must ` +
-          `not be reported as zero; empty dailies confirm a real zero. Original: ${err.message}`,
+          `fault, and the vendor number and credentials are fine. ${remedy} ` +
+          `Original: ${err.message}`,
         { status: err.status, errors: err.errors },
       );
     }
     throw err;
   }
 };
+
+/** Sales reports roll up from the dailies, so a finer granularity settles it. */
+const SALES_EMPTY_REMEDY =
+  "Before recording a zero, note that Apple returns this same 404 for a period it has not " +
+  "generated yet: weekly and monthly reports are assembled after the dailies, so a recently " +
+  "ended week can 404 while the days inside it have sales. Re-ask at DAILY granularity across " +
+  "the same span — sales in the dailies mean this is reporting lag and must not be reported as " +
+  "zero; empty dailies confirm a real zero.";
+
+/**
+ * Finance reports have no finer granularity to fall back on, so the checks are
+ * different ones: whether the fiscal month has been published at all, and
+ * whether the caller meant this fiscal period in the first place.
+ */
+const FINANCE_EMPTY_REMEDY =
+  "Finance reports have no finer granularity to re-ask at, so check three other things before " +
+  "recording a zero. Apple publishes them once the fiscal month closes and settles, several " +
+  "weeks in arrears, so a recent period may simply not exist yet. A single region can be empty " +
+  "while the account is not — try regionCode ZZ, which covers all regions. And confirm " +
+  "reportDate is the fiscal period you meant: Apple's fiscal months are 4-4-5 against a year " +
+  "opening in late September, so they do not line up with calendar months.";
 
 /**
  * How far back to date the probe report. Sales reports lag ~24h, so "yesterday"
@@ -297,11 +469,11 @@ export const registerReportTools = (
         "Download a sales & trends report (units, proceeds) as TSV. Reports lag ~24h and are " +
         "keyed by date: DAILY needs YYYY-MM-DD, WEEKLY the week-ending Sunday, MONTHLY YYYY-MM, " +
         "YEARLY YYYY. Requires a vendor number. The report is account-wide — it holds every app " +
-        "the vendor ships, keyed by SKU / Title / Apple Identifier, and Apple offers no per-app " +
-        "filter, so totals must be filtered to one app after download or they span the whole " +
-        "portfolio. Units mix first-time downloads with free updates (see Product Type " +
-        "Identifier), and Developer Proceeds / Customer Price are per unit, not per row. A period " +
-        "with no rows comes back as a 404.",
+        "the vendor ships, keyed by SKU / Title / Apple Identifier. Apple offers no per-app " +
+        "filter, so pass appleIdentifier or sku to have this tool apply one after download — " +
+        "otherwise every total spans the whole portfolio. Units mix first-time downloads with " +
+        "free updates (see Product Type Identifier), and Developer Proceeds / Customer Price are " +
+        "per unit, not per row. A period with no rows comes back as a 404.",
       inputSchema: {
         reportDate: z
           .string()
@@ -316,6 +488,17 @@ export const registerReportTools = (
           .string()
           .optional()
           .describe("Override APP_STORE_CONNECT_VENDOR_NUMBER for this call."),
+        appleIdentifier: z
+          .string()
+          .optional()
+          .describe(
+            'Keep only rows whose "Apple Identifier" matches this app id, dropping the rest of ' +
+              "the portfolio. Applied before maxLines, so truncation counts this app's rows only.",
+          ),
+        sku: z
+          .string()
+          .optional()
+          .describe('Keep only rows whose "SKU" matches. Combines with appleIdentifier.'),
         maxLines: z
           .number()
           .int()
@@ -326,11 +509,20 @@ export const registerReportTools = (
       },
       annotations: { readOnlyHint: true },
     },
-    async ({ reportDate, frequency, reportType, reportSubType, vendorNumber, maxLines }) =>
+    async ({
+      reportDate,
+      frequency,
+      reportType,
+      reportSubType,
+      vendorNumber,
+      appleIdentifier,
+      sku,
+      maxLines,
+    }) =>
       wrap(async () => {
         const vendor = requireVendor(vendorNumber, ctx.vendorNumber);
         const tsv = await withVendorHint(vendor, () =>
-          withEmptyPeriodHint(`${frequency} ${reportDate}`, () =>
+          withEmptyPeriodHint(`${frequency} ${reportDate}`, SALES_EMPTY_REMEDY, () =>
             client.downloadReport("/v1/salesReports", {
               "filter[frequency]": frequency,
               "filter[reportType]": reportType,
@@ -340,7 +532,28 @@ export const registerReportTools = (
             }),
           ),
         );
-        return previewReport(tsv, maxLines);
+
+        if (appleIdentifier === undefined && sku === undefined) return previewReport(tsv, maxLines);
+
+        const filtered = filterSalesReport(tsv, { appleIdentifier, sku });
+        return {
+          filter: {
+            ...compact({ appleIdentifier, sku }),
+            matchedRows: filtered.matchedRows,
+            droppedRows: filtered.droppedRows,
+            ...(filtered.matchedRows === 0
+              ? {
+                  note:
+                    `No rows matched. The report holds ${filtered.droppedRows} rows for other ` +
+                    `apps, so the period itself is not empty — this is a filter that did not ` +
+                    `match, most often a correct-looking id from a different account. ` +
+                    `"${filtered.availableColumn}" values present: ` +
+                    `${filtered.available.join(", ") || "none"}.`,
+                }
+              : {}),
+          },
+          ...previewReport(filtered.tsv, maxLines),
+        };
       }),
   );
 
@@ -348,10 +561,24 @@ export const registerReportTools = (
     "app_store_connect_download_finance_report",
     {
       description:
-        "Download a financial report (proceeds by region) as TSV for one fiscal month and region. " +
-        "Requires a vendor number.",
+        "Download a financial report (money Apple actually paid, by region) as TSV for one " +
+        "fiscal month. This is the authoritative source for proceeds — prefer it over the sales " +
+        "report when the question is revenue. Requires a vendor number. " +
+        "reportDate is a FISCAL period, not a calendar one: Apple's fiscal year opens in late " +
+        "September and its months are 4-4-5 weeks, so 2026-07 means fiscal month 7 of FY2026 — " +
+        "roughly late March to early May — not July. Asking for the wrong period is silent, " +
+        "because a well-formed report comes back either way, so read the returned `coverage` " +
+        "start and end dates before quoting any number from it. A period with no rows, or one " +
+        "Apple has not published yet, comes back as a 404.",
       inputSchema: {
-        reportDate: z.string().min(1).describe("Fiscal period as YYYY-MM."),
+        reportDate: z
+          .string()
+          .min(1)
+          .describe(
+            "Fiscal period as YYYY-MM. Fiscal, not calendar — FY2026 opens in late September " +
+              "2025, so 2026-07 spans roughly late March to early May 2026. Check `coverage` in " +
+              "the response to confirm which dates you actually got.",
+          ),
         regionCode: z
           .string()
           .min(1)
@@ -360,7 +587,13 @@ export const registerReportTools = (
           .string()
           .optional()
           .describe("Override APP_STORE_CONNECT_VENDOR_NUMBER for this call."),
-        maxLines: z.number().int().min(1).max(5000).default(500),
+        maxLines: z
+          .number()
+          .int()
+          .min(1)
+          .max(5000)
+          .default(500)
+          .describe("Truncate the TSV to this many lines. Defaults to 500."),
       },
       annotations: { readOnlyHint: true },
     },
@@ -368,16 +601,35 @@ export const registerReportTools = (
       wrap(async () => {
         const vendor = requireVendor(vendorNumber, ctx.vendorNumber);
         const tsv = await withVendorHint(vendor, () =>
-          withEmptyPeriodHint(`fiscal ${reportDate} in region ${regionCode}`, () =>
-            client.downloadReport("/v1/financeReports", {
-              "filter[regionCode]": regionCode,
-              "filter[reportType]": "FINANCIAL",
-              "filter[vendorNumber]": vendor,
-              "filter[reportDate]": reportDate,
-            }),
+          withEmptyPeriodHint(
+            `fiscal ${reportDate} in region ${regionCode}`,
+            FINANCE_EMPTY_REMEDY,
+            () =>
+              client.downloadReport("/v1/financeReports", {
+                "filter[regionCode]": regionCode,
+                "filter[reportType]": "FINANCIAL",
+                "filter[vendorNumber]": vendor,
+                "filter[reportDate]": reportDate,
+              }),
           ),
         );
-        return previewReport(tsv, maxLines);
+
+        // The dates the report covers are in the report, so the fiscal-vs-calendar
+        // question is answered from the data rather than from the caller's memory
+        // of Apple's calendar.
+        const coverage = financeCoverage(tsv);
+        return {
+          ...(coverage
+            ? { coverage: { ...coverage, requestedFiscalPeriod: reportDate } }
+            : {
+                coverage: null,
+                coverageNote:
+                  "This report carries no Start Date / End Date columns, so the fiscal period " +
+                  "it covers could not be confirmed from the data. Verify the dates before " +
+                  "quoting figures — reportDate is fiscal, not calendar.",
+              }),
+          ...previewReport(tsv, maxLines),
+        };
       }),
   );
 
@@ -618,6 +870,154 @@ export const registerReportTools = (
       }),
   );
 
+  server.registerTool(
+    "app_store_connect_get_analytics_status",
+    {
+      description:
+        'Answer "is there any analytics data yet, and how far back does it go" in one call. ' +
+        "Walks the whole chain — requests, then reports, then instances — and returns the counts " +
+        "plus the earliest and latest processing dates, instead of the four-to-six paginated " +
+        "calls the walk normally takes. Use this first whenever the question is whether " +
+        "analytics are available at all, especially just after creating a request: instances is " +
+        "the number that matters, because reports exist as soon as Apple registers them but hold " +
+        "nothing until instances appear a day or two later. FRAMEWORK_USAGE reports are excluded " +
+        "by default — they are the bulk of the catalogue and almost never what a product " +
+        "question is about.",
+      inputSchema: {
+        appId: appIdArg,
+        category: z
+          .enum(REPORT_CATEGORIES)
+          .optional()
+          .describe(
+            "Restrict to one category. APP_STORE_ENGAGEMENT covers impressions, product page " +
+              "views and conversion; APP_USAGE covers installs, sessions and retention; COMMERCE " +
+              "covers sales and proceeds.",
+          ),
+        includeFrameworkUsage: z
+          .boolean()
+          .default(false)
+          .describe("Include FRAMEWORK_USAGE reports, which are excluded by default as noise."),
+        maxReportsProbed: z
+          .number()
+          .int()
+          .min(1)
+          .max(100)
+          .default(20)
+          .describe(
+            "How many reports to check for instances. Reports beyond this are counted but not " +
+              "probed, and the response says so. Defaults to 20.",
+          ),
+      },
+      annotations: { readOnlyHint: true },
+    },
+    async ({ appId, category, includeFrameworkUsage, maxReportsProbed }) =>
+      wrap(async () => {
+        const requests = await client.getAll<Rec>(`/v1/apps/${appId}/analyticsReportRequests`, {
+          limit: 200,
+        });
+        const accessTypes = requests.data.map((request) => attributesOf(request).accessType);
+
+        if (requests.data.length === 0) {
+          return {
+            requests: 0,
+            reports: 0,
+            instances: 0,
+            earliestInstanceDate: null,
+            latestInstanceDate: null,
+            note:
+              "This app has no analytics report requests, so Apple is collecting nothing for it " +
+              "and no analytics can be read. Create one with " +
+              "app_store_connect_create_analytics_report_request — both access types, since " +
+              "ONGOING backfills nothing and only ONE_TIME_SNAPSHOT can reach the past.",
+          };
+        }
+
+        const reportPages = await Promise.all(
+          requests.data.map((request) =>
+            client.getAll<Rec>(
+              `/v1/analyticsReportRequests/${request.id}/reports`,
+              compact({ "filter[category]": category, limit: 200 }),
+            ),
+          ),
+        );
+        const allReports = reportPages.flatMap((page) => page.data);
+
+        // Apple returns FRAMEWORK_USAGE for things like AirPlay discovery sessions
+        // on apps that never touch them, and it dominates the catalogue by count.
+        const excluded =
+          category === undefined && !includeFrameworkUsage
+            ? allReports.filter((report) => attributesOf(report).category === "FRAMEWORK_USAGE")
+                .length
+            : 0;
+        const reports =
+          category === undefined && !includeFrameworkUsage
+            ? allReports.filter((report) => attributesOf(report).category !== "FRAMEWORK_USAGE")
+            : allReports;
+
+        const probed = reports.slice(0, maxReportsProbed);
+        const instancePages = await Promise.all(
+          probed.map((report) =>
+            client.getAll<Rec>(`/v1/analyticsReports/${report.id}/instances`, { limit: 200 }),
+          ),
+        );
+
+        const byCategory: Record<string, { reports: number; instances: number }> = {};
+        for (const report of reports) {
+          const name = String(attributesOf(report).category ?? "UNKNOWN");
+          byCategory[name] ??= { reports: 0, instances: 0 };
+          (byCategory[name] as { reports: number }).reports += 1;
+        }
+        probed.forEach((report, index) => {
+          const name = String(attributesOf(report).category ?? "UNKNOWN");
+          byCategory[name] ??= { reports: 0, instances: 0 };
+          (byCategory[name] as { instances: number }).instances +=
+            instancePages[index]?.data.length ?? 0;
+        });
+
+        const dates = instancePages
+          .flatMap((page) => page.data)
+          .map((instance) => attributesOf(instance).processingDate)
+          .filter((date): date is string => typeof date === "string" && date !== "")
+          .toSorted();
+        const instances = instancePages.reduce((sum, page) => sum + page.data.length, 0);
+
+        const unprobed = reports.length - probed.length;
+        return {
+          requests: requests.data.length,
+          accessTypes,
+          reports: reports.length,
+          instances,
+          earliestInstanceDate: dates[0] ?? null,
+          latestInstanceDate: dates[dates.length - 1] ?? null,
+          byCategory,
+          reportsProbed: probed.length,
+          ...(excluded > 0 ? { frameworkUsageReportsExcluded: excluded } : {}),
+          ...compact({
+            // Never let a bounded walk read as a complete one.
+            truncationNote:
+              unprobed > 0
+                ? `${unprobed} of ${reports.length} reports were not probed for instances, so ` +
+                  `the instance count is a floor, not a total. Raise maxReportsProbed or pass ` +
+                  `a category to narrow it.`
+                : undefined,
+            note:
+              instances === 0
+                ? "Reports exist but hold no instances yet, so there is no data to read. Apple " +
+                  "generates instances a day or two after a request is created — this is " +
+                  "normal immediately after enabling analytics, and is not an error."
+                : undefined,
+            // The failure mode #6 warns about, detectable here for free.
+            historyWarning: !accessTypes.includes("ONE_TIME_SNAPSHOT")
+              ? "No ONE_TIME_SNAPSHOT request exists — only ONGOING, which backfills nothing. " +
+                "The snapshot window rolls forward, so history before the ONGOING request was " +
+                "created is being lost permanently. Create a snapshot request now if any past " +
+                "data still matters."
+              : undefined,
+          }),
+        };
+      }),
+  );
+
   if (!ctx.allowWrites) return;
 
   server.registerTool(
@@ -627,8 +1027,14 @@ export const registerReportTools = (
         "Request analytics reports for an app — the one-off setup step before any analytics can " +
         "be read. Check app_store_connect_list_analytics_report_requests first: Apple rejects a " +
         "second ONGOING request for the same app, and an existing one is reusable forever. Apple " +
-        "then generates reports asynchronously over the following day or two. ONE_TIME_SNAPSHOT " +
-        "covers the last ~52 weeks; ONGOING keeps producing them.",
+        "then generates reports asynchronously over the following day or two. " +
+        "Normally create BOTH access types, because they cover different time and neither " +
+        "substitutes for the other. ONE_TIME_SNAPSHOT is the only way to obtain history: it " +
+        "covers the last ~52 weeks as of when it is created, and that window rolls forward, so " +
+        "history not captured by a snapshot is lost permanently and no later request can recover " +
+        "it. ONGOING starts collecting from now and backfills nothing. Creating only ONGOING " +
+        "therefore silently forfeits the app's entire past, and the loss is invisible — next " +
+        "month looks healthy because it has data, while the year before it no longer exists.",
       inputSchema: {
         appId: appIdArg,
         accessType: z.enum(["ONE_TIME_SNAPSHOT", "ONGOING"]).default("ONGOING"),
