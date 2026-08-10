@@ -112,6 +112,7 @@ describe("tool registration", () => {
       "app_store_connect_list_analytics_report_instances",
       "app_store_connect_list_analytics_report_segments",
       "app_store_connect_download_analytics_report_segment",
+      "app_store_connect_get_analytics_status",
       "app_store_connect_list_users",
       "app_store_connect_list_bundle_ids",
       "app_store_connect_list_devices",
@@ -947,6 +948,11 @@ describe("in-app purchase pricing", () => {
               },
             },
           },
+          {
+            id: PRICE_POINT_ID,
+            type: "inAppPurchasePricePoints",
+            attributes: { customerPrice: "4.99", proceeds: "3.49" },
+          },
           { id: "USA", type: "territories", attributes: { currency: "USD" } },
         ],
       }),
@@ -969,9 +975,18 @@ describe("in-app purchase pricing", () => {
           manual: true,
           territory: "USA",
           pricePointId: PRICE_POINT_ID,
+          customerPrice: "4.99",
+          proceeds: "3.49",
         },
       ],
     });
+
+    // Same defect as the app-side schedule: without the nested include Apple
+    // returns no price-point relationship at all, so this fixture only
+    // resembles a real response because the include asks for it.
+    const include = new URL(String(callArgs(fetchImpl)[0])).searchParams.get("include") ?? "";
+    expect(include).toContain("manualPrices.inAppPurchasePricePoint");
+    expect(include).toContain("manualPrices.territory");
   });
 
   it("reports an unpriced IAP as an empty price list", async () => {
@@ -1411,6 +1426,443 @@ describe("reports require a vendor number", () => {
     // The disambiguation that stops a lag being written down as zero.
     expect(text).toContain("DAILY");
     expect(text).toContain("must not be reported as zero");
+  });
+});
+
+/**
+ * Apple keys finance reports by *fiscal* period: its year opens in late
+ * September and its months are 4-4-5 weeks, so `2026-07` is fiscal month 7 of
+ * FY2026 — late March to early May — not July. Nothing in the request or the
+ * response headline says so, which makes asking for the wrong quarter entirely
+ * silent: a well-formed report for a period nobody chose. The dates are already
+ * in the TSV, so the tool reads them back rather than relying on the caller
+ * knowing Apple's calendar.
+ */
+describe("download_finance_report", () => {
+  const VENDOR = "85326407";
+  const FINANCE_TSV =
+    "Start Date\tEnd Date\tVendor Identifier\tQuantity\tExtended Partner Share\tCurrency\n" +
+    "03/29/2026\t05/02/2026\tD1EXPLORER\t42\t123.45\tUSD\n";
+
+  it("sends the fiscal period and region as Apple's filters", async () => {
+    const fetchImpl = vi.fn(async () => gzipResponse(FINANCE_TSV));
+    const client = await connect(baseConfig, fetchImpl as unknown as typeof fetch);
+
+    await client.callTool({
+      name: "app_store_connect_download_finance_report",
+      arguments: { reportDate: "2026-07", regionCode: "ZZ", vendorNumber: VENDOR },
+    });
+
+    const url = new URL(callArgs(fetchImpl)[0]);
+    expect(url.pathname).toBe("/v1/financeReports");
+    expect(url.searchParams.get("filter[regionCode]")).toBe("ZZ");
+    expect(url.searchParams.get("filter[reportType]")).toBe("FINANCIAL");
+    expect(url.searchParams.get("filter[reportDate]")).toBe("2026-07");
+    expect(url.searchParams.get("filter[vendorNumber]")).toBe(VENDOR);
+  });
+
+  it("reports the calendar dates the fiscal period actually covers", async () => {
+    const fetchImpl = vi.fn(async () => gzipResponse(FINANCE_TSV));
+    const client = await connect(baseConfig, fetchImpl as unknown as typeof fetch);
+
+    const result = await client.callTool({
+      name: "app_store_connect_download_finance_report",
+      arguments: { reportDate: "2026-07", regionCode: "ZZ", vendorNumber: VENDOR },
+    });
+
+    const body = JSON.parse(textOf(result)) as Record<string, unknown>;
+    // Asking for "2026-07" and being handed late March is the whole trap; the
+    // answer has to be in the payload, not in a document nobody read.
+    expect(body.coverage).toEqual({
+      startDate: "2026-03-29",
+      endDate: "2026-05-02",
+      requestedFiscalPeriod: "2026-07",
+    });
+    // The report itself is untouched, so downstream parsing is unaffected.
+    expect(body.report).toBe(FINANCE_TSV);
+    expect(body.dataRows).toBe(1);
+  });
+
+  /**
+   * Finance reports are multi-section and Apple has changed their columns before.
+   * An unrecognised shape must cost the caller the convenience, not the report —
+   * but it must still say the period is unconfirmed, because silence here reads
+   * as agreement that the month was the one requested.
+   */
+  it("says so rather than guessing when the report carries no dates", async () => {
+    const fetchImpl = vi.fn(async () => gzipResponse("Vendor Identifier\tQuantity\nD1\t42\n"));
+    const client = await connect(baseConfig, fetchImpl as unknown as typeof fetch);
+
+    const result = await client.callTool({
+      name: "app_store_connect_download_finance_report",
+      arguments: { reportDate: "2026-07", regionCode: "ZZ", vendorNumber: VENDOR },
+    });
+
+    const body = JSON.parse(textOf(result)) as Record<string, unknown>;
+    expect(body.coverage).toBeNull();
+    expect(String(body.coverageNote)).toContain("fiscal, not calendar");
+    expect(body.dataRows).toBe(1);
+  });
+
+  /**
+   * The empty-period hint is shared with the sales tool, which tells the caller
+   * to re-ask at DAILY granularity. Finance reports have no frequency argument
+   * at all, so that advice names a parameter this tool does not have.
+   */
+  it("gives a 404 remedy that fits a report with no granularity", async () => {
+    const fetchImpl = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ errors: [{ code: "NOT_FOUND" }] }), {
+          status: 404,
+          headers: { "content-type": "application/json" },
+        }),
+    );
+    const client = await connect(
+      { ...baseConfig, maxRetries: 0 },
+      fetchImpl as unknown as typeof fetch,
+    );
+
+    const result = await client.callTool({
+      name: "app_store_connect_download_finance_report",
+      arguments: { reportDate: "2026-07", regionCode: "US", vendorNumber: VENDOR },
+    });
+
+    expect(result.isError).toBe(true);
+    const text = textOf(result);
+    expect(text).toContain("fiscal 2026-07 in region US");
+    expect(text).toContain("not a fault");
+    // The checks that do apply here: publication lag, region, fiscal calendar.
+    expect(text).toContain("regionCode ZZ");
+    expect(text).toContain("4-4-5");
+    // And not the one that does not.
+    expect(text).not.toContain("DAILY");
+  });
+});
+
+/**
+ * Apple has no per-app filter on the sales endpoint, so the TSV is account-wide
+ * and interleaved. Filtering it by eye is both tedious and the likeliest way to
+ * quote a portfolio total as one app's — and truncation across the interleaving
+ * silently removes part of every app rather than a clean tail.
+ */
+describe("download_sales_report per-app filter", () => {
+  const VENDOR = "85326407";
+  const HEADER = "Provider\tSKU\tTitle\tUnits\tApple Identifier";
+  const SALES_TSV =
+    `${HEADER}\n` +
+    "APPLE\tD1EXPLORER\tD1 Explorer\t10\t6740111111\n" +
+    "APPLE\tOTHERAPP\tOther App\t5\t6740222222\n" +
+    "APPLE\tD1EXPLORER\tD1 Explorer\t3\t6740111111\n";
+
+  const download = async (
+    args: Record<string, unknown>,
+    tsv = SALES_TSV,
+  ): ReturnType<Client["callTool"]> => {
+    const fetchImpl = vi.fn(async () => gzipResponse(tsv));
+    const client = await connect(baseConfig, fetchImpl as unknown as typeof fetch);
+    return client.callTool({
+      name: "app_store_connect_download_sales_report",
+      arguments: { reportDate: "2026-07", vendorNumber: VENDOR, ...args },
+    });
+  };
+
+  it("returns the whole portfolio untouched when no filter is given", async () => {
+    const body = JSON.parse(textOf(await download({}))) as Record<string, unknown>;
+
+    expect(body.filter).toBeUndefined();
+    expect(body.report).toBe(SALES_TSV);
+    expect(body.dataRows).toBe(3);
+  });
+
+  it("keeps one app's rows, preserves the header, and counts what it dropped", async () => {
+    const body = JSON.parse(textOf(await download({ appleIdentifier: "6740111111" }))) as Record<
+      string,
+      unknown
+    >;
+
+    expect(body.filter).toMatchObject({
+      appleIdentifier: "6740111111",
+      matchedRows: 2,
+      droppedRows: 1,
+    });
+    // The header has to survive: report_stats.py keys on the column names.
+    expect(String(body.report).split("\n")[0]).toBe(HEADER);
+    expect(String(body.report)).not.toContain("OTHERAPP");
+    expect(body.dataRows).toBe(2);
+  });
+
+  it("filters on SKU too, and combines the two", async () => {
+    const bySku = JSON.parse(textOf(await download({ sku: "OTHERAPP" }))) as Record<
+      string,
+      unknown
+    >;
+    expect(bySku.filter).toMatchObject({ matchedRows: 1, droppedRows: 2 });
+
+    // Contradictory pair: this SKU never appears against that Apple Identifier.
+    const both = JSON.parse(
+      textOf(await download({ sku: "OTHERAPP", appleIdentifier: "6740111111" })),
+    ) as Record<string, unknown>;
+    expect(both.filter).toMatchObject({ matchedRows: 0 });
+  });
+
+  /**
+   * The reason filtering belongs in the server rather than downstream: truncation
+   * runs over the filtered rows, so `truncated` describes this app. Applied to
+   * the raw report the same limit would cut across every app at once, and
+   * `truncated: true` would not reveal that one had vanished entirely.
+   */
+  it("truncates the filtered rows, not an arbitrary slice of the portfolio", async () => {
+    const filtered = JSON.parse(
+      textOf(await download({ appleIdentifier: "6740111111", maxLines: 3 })),
+    ) as Record<string, unknown>;
+    // Header plus this app's two rows is exactly 3 lines: complete, not truncated.
+    expect(filtered.truncated).toBe(false);
+    expect(filtered.dataRows).toBe(2);
+
+    const unfiltered = JSON.parse(textOf(await download({ maxLines: 3 }))) as Record<
+      string,
+      unknown
+    >;
+    // The same limit over the raw report drops a row without saying which app lost it.
+    expect(unfiltered.truncated).toBe(true);
+  });
+
+  /**
+   * An empty result after filtering is ambiguous in the one way that matters: a
+   * quiet app and a wrong id look identical. The row count for everything else
+   * settles it, and the ids actually present turn a dead end into the next step.
+   */
+  it("distinguishes a filter that matched nothing from an empty period", async () => {
+    const body = JSON.parse(textOf(await download({ appleIdentifier: "9999999999" }))) as Record<
+      string,
+      unknown
+    >;
+
+    const filter = body.filter as Record<string, unknown>;
+    expect(filter).toMatchObject({ matchedRows: 0, droppedRows: 3 });
+    expect(String(filter.note)).toContain("the period itself is not empty");
+    expect(String(filter.note)).toContain("6740111111");
+    expect(String(filter.note)).toContain("6740222222");
+    // Still a well-formed report, just an empty one.
+    expect(String(body.report).split("\n")[0]).toBe(HEADER);
+    expect(body.dataRows).toBe(0);
+  });
+
+  /**
+   * Silently ignoring an unhonourable filter would hand back the entire portfolio
+   * under a name claiming one app — exactly the error the argument exists to
+   * prevent, and worse than failing because the number looks plausible.
+   */
+  it("fails rather than ignoring a filter the report cannot honour", async () => {
+    const result = await download(
+      { appleIdentifier: "6740111111" },
+      "Provider\tUnits\nAPPLE\t10\n",
+    );
+
+    expect(result.isError).toBe(true);
+    const text = textOf(result);
+    expect(text).toContain("Apple Identifier");
+    expect(text).toContain("Provider, Units");
+  });
+});
+
+describe("get_analytics_status", () => {
+  const APP_ID = "1234567890";
+
+  const request = (id: string, accessType: string): unknown => ({
+    id,
+    type: "analyticsReportRequests",
+    attributes: { accessType, stoppedDueToInactivity: false },
+  });
+  const report = (id: string, category: string): unknown => ({
+    id,
+    type: "analyticsReports",
+    attributes: { name: `Report ${id}`, category },
+  });
+  const instance = (id: string, processingDate: string): unknown => ({
+    id,
+    type: "analyticsReportInstances",
+    attributes: { granularity: "DAILY", processingDate },
+  });
+
+  /** Routes the three hops of the walk by pathname, as Apple lays them out. */
+  const walk = (opts: {
+    requests: unknown[];
+    reports?: unknown[];
+    instances?: Record<string, unknown[]>;
+  }): ReturnType<typeof vi.fn> =>
+    vi.fn(async (url: string) => {
+      const { pathname } = new URL(String(url));
+      if (pathname.endsWith("/analyticsReportRequests")) {
+        return jsonResponse({ data: opts.requests });
+      }
+      if (pathname.endsWith("/reports")) return jsonResponse({ data: opts.reports ?? [] });
+      const match = /\/v1\/analyticsReports\/([^/]+)\/instances$/.exec(pathname);
+      if (match) return jsonResponse({ data: opts.instances?.[match[1] as string] ?? [] });
+      return jsonResponse({ data: [] });
+    });
+
+  const status = async (
+    fetchImpl: ReturnType<typeof vi.fn>,
+    args: Record<string, unknown> = {},
+  ): Promise<Record<string, unknown>> => {
+    const client = await connect(baseConfig, fetchImpl as unknown as typeof fetch);
+    const result = await client.callTool({
+      name: "app_store_connect_get_analytics_status",
+      arguments: { appId: APP_ID, ...args },
+    });
+    expect(result.isError).toBeFalsy();
+    return JSON.parse(textOf(result)) as Record<string, unknown>;
+  };
+
+  it("answers the whole walk — requests, reports, instances, earliest date — in one call", async () => {
+    const body = await status(
+      walk({
+        requests: [request("req-1", "ONGOING"), request("req-2", "ONE_TIME_SNAPSHOT")],
+        reports: [report("rep-1", "APP_STORE_ENGAGEMENT"), report("rep-2", "APP_USAGE")],
+        instances: {
+          "rep-1": [instance("ins-1", "2026-06-02"), instance("ins-2", "2026-06-01")],
+          "rep-2": [instance("ins-3", "2026-07-15")],
+        },
+      }),
+    );
+
+    // Two requests, each listing the same two reports: the counts are totals
+    // across the whole walk, not one request's slice.
+    expect(body.requests).toBe(2);
+    expect(body.reports).toBe(4);
+    expect(body.instances).toBe(6);
+    expect(body.earliestInstanceDate).toBe("2026-06-01");
+    expect(body.latestInstanceDate).toBe("2026-07-15");
+    expect(body.accessTypes).toEqual(["ONGOING", "ONE_TIME_SNAPSHOT"]);
+    expect(body.byCategory).toMatchObject({
+      APP_STORE_ENGAGEMENT: { reports: 2, instances: 4 },
+      APP_USAGE: { reports: 2, instances: 2 },
+    });
+  });
+
+  /**
+   * FRAMEWORK_USAGE dominates the catalogue by count — AirPlay discovery sessions
+   * on an app that has never touched AirPlay — and is almost never what a product
+   * question is about. Dropping it silently would be its own problem, so the
+   * count that was removed is reported.
+   */
+  it("excludes FRAMEWORK_USAGE by default and says how much it removed", async () => {
+    const fetchImpl = walk({
+      requests: [request("req-1", "ONGOING")],
+      reports: [
+        report("rep-1", "APP_STORE_ENGAGEMENT"),
+        report("rep-2", "FRAMEWORK_USAGE"),
+        report("rep-3", "FRAMEWORK_USAGE"),
+      ],
+      instances: { "rep-1": [instance("ins-1", "2026-06-01")] },
+    });
+
+    const body = await status(fetchImpl);
+    expect(body.reports).toBe(1);
+    expect(body.frameworkUsageReportsExcluded).toBe(2);
+
+    const kept = await status(
+      walk({
+        requests: [request("req-1", "ONGOING")],
+        reports: [report("rep-1", "APP_STORE_ENGAGEMENT"), report("rep-2", "FRAMEWORK_USAGE")],
+      }),
+      { includeFrameworkUsage: true },
+    );
+    expect(kept.reports).toBe(2);
+    expect(kept.frameworkUsageReportsExcluded).toBeUndefined();
+  });
+
+  /**
+   * "Reports exist" and "there is data" are different answers, and the gap between
+   * them is the normal state for a day or two after enabling analytics. Reporting
+   * it as an error would send someone debugging credentials that are fine.
+   */
+  it("separates reports existing from instances holding anything", async () => {
+    const body = await status(
+      walk({
+        requests: [request("req-1", "ONGOING"), request("req-2", "ONE_TIME_SNAPSHOT")],
+        reports: [report("rep-1", "APP_USAGE")],
+        instances: {},
+      }),
+    );
+
+    expect(body.reports).toBe(2);
+    expect(body.instances).toBe(0);
+    expect(body.earliestInstanceDate).toBeNull();
+    expect(String(body.note)).toContain("a day or two");
+  });
+
+  it("reports no request at all as the actionable state it is", async () => {
+    const fetchImpl = walk({ requests: [] });
+    const body = await status(fetchImpl);
+
+    expect(body).toMatchObject({ requests: 0, reports: 0, instances: 0 });
+    expect(body.earliestInstanceDate).toBeNull();
+    expect(String(body.note)).toContain("create_analytics_report_request");
+    // Nothing further to walk, so nothing further is fetched.
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  /**
+   * The loss #6 warns about, caught for free: ONGOING backfills nothing and the
+   * snapshot window rolls forward, so an account with only ONGOING is shedding
+   * history invisibly — next month looks healthy because it has data.
+   */
+  it("warns when only ONGOING exists, because the past is being lost", async () => {
+    const withOngoingOnly = await status(
+      walk({
+        requests: [request("req-1", "ONGOING")],
+        reports: [report("rep-1", "APP_USAGE")],
+        instances: { "rep-1": [instance("ins-1", "2026-06-01")] },
+      }),
+    );
+    expect(String(withOngoingOnly.historyWarning)).toContain("backfills nothing");
+
+    const withSnapshot = await status(
+      walk({
+        requests: [request("req-1", "ONGOING"), request("req-2", "ONE_TIME_SNAPSHOT")],
+        reports: [report("rep-1", "APP_USAGE")],
+        instances: { "rep-1": [instance("ins-1", "2026-06-01")] },
+      }),
+    );
+    expect(withSnapshot.historyWarning).toBeUndefined();
+  });
+
+  /**
+   * A bounded walk that reads as a complete one is the failure mode this tool
+   * exists to remove, so the cap has to be visible in the payload — an instance
+   * count that is a floor must say it is a floor.
+   */
+  it("never lets a capped probe read as a total", async () => {
+    const body = await status(
+      walk({
+        requests: [request("req-1", "ONE_TIME_SNAPSHOT")],
+        reports: [report("rep-1", "APP_USAGE"), report("rep-2", "COMMERCE")],
+        instances: {
+          "rep-1": [instance("ins-1", "2026-06-01")],
+          "rep-2": [instance("ins-2", "2026-06-02")],
+        },
+      }),
+      { maxReportsProbed: 1 },
+    );
+
+    expect(body.reports).toBe(2);
+    expect(body.reportsProbed).toBe(1);
+    expect(String(body.truncationNote)).toContain("floor, not a total");
+  });
+
+  it("passes a category filter through to Apple rather than filtering locally", async () => {
+    const fetchImpl = walk({
+      requests: [request("req-1", "ONGOING")],
+      reports: [report("rep-1", "COMMERCE")],
+    });
+    await status(fetchImpl, { category: "COMMERCE" });
+
+    const reportsCall = fetchImpl.mock.calls
+      .map((call) => new URL(String(call[0])))
+      .find((url) => url.pathname.endsWith("/reports"));
+    expect(reportsCall?.searchParams.get("filter[category]")).toBe("COMMERCE");
   });
 });
 
@@ -2168,6 +2620,81 @@ describe("submission prerequisites", () => {
 
       expect(result.isError).toBeFalsy();
       expect(textOf(result)).toContain("never been priced");
+    });
+
+    /**
+     * The amount lives on the price point, not on the price, so asking for
+     * `manualPrices` alone returns rows with no relationships at all — and
+     * because `JSON.stringify` drops undefined, `pricePointId` and `territory`
+     * come back invisible rather than absent. The tool then answers "what does
+     * this app cost" with an opaque base64 id, leaving the caller to decode it
+     * or page hundreds of price points to discover the app is free.
+     */
+    it("asks for the nested includes the prices are unreadable without", async () => {
+      const fetchImpl = vi.fn(async () =>
+        jsonResponse({ data: { id: "sched-1", type: "appPriceSchedules" } }),
+      );
+
+      await callTool("app_store_connect_get_app_price_schedule", { appId: APP_ID }, fetchImpl);
+
+      const include = new URL(String(callArgs(fetchImpl)[0])).searchParams.get("include") ?? "";
+      expect(include).toContain("manualPrices.appPricePoint");
+      expect(include).toContain("manualPrices.territory");
+      expect(include).toContain("baseTerritory");
+    });
+
+    it("inlines the price behind each price point so the cost is in the answer", async () => {
+      const fetchImpl = vi.fn(async () =>
+        jsonResponse({
+          data: {
+            id: "sched-1",
+            type: "appPriceSchedules",
+            relationships: { baseTerritory: { data: { id: "USA", type: "territories" } } },
+          },
+          included: [
+            {
+              id: "price-1",
+              type: "appPrices",
+              attributes: { startDate: null, endDate: null, manual: true },
+              relationships: {
+                territory: { data: { id: "USA", type: "territories" } },
+                appPricePoint: { data: { id: "free-point", type: "appPricePoints" } },
+              },
+            },
+            {
+              id: "free-point",
+              type: "appPricePoints",
+              attributes: { customerPrice: "0.00", proceeds: "0.00" },
+            },
+            { id: "USA", type: "territories", attributes: { currency: "USD" } },
+          ],
+        }),
+      );
+
+      const result = await callTool(
+        "app_store_connect_get_app_price_schedule",
+        { appId: APP_ID },
+        fetchImpl,
+      );
+
+      expect(JSON.parse(textOf(result))).toEqual({
+        scheduleId: "sched-1",
+        baseTerritory: "USA",
+        manualPrices: [
+          {
+            id: "price-1",
+            startDate: null,
+            endDate: null,
+            manual: true,
+            territory: "USA",
+            pricePointId: "free-point",
+            // The two fields the caller actually asked for. A free app is
+            // customerPrice "0.00" — the absence of a price is a different state.
+            customerPrice: "0.00",
+            proceeds: "0.00",
+          },
+        ],
+      });
     });
   });
 
