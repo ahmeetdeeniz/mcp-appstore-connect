@@ -141,6 +141,22 @@ numeric total, and which columns are worth grouping by — which means you never
 have to guess a column name, and you find out immediately if Apple returned a
 different shape than you expected.
 
+**A sales report covers the whole vendor account, not one app.** If the account
+ships more than one, every row of every other app is in the same file, and an
+unfiltered `summary` totals all of them into a number that reads exactly like
+the app you asked about. Pass `--where` on every command:
+
+```bash
+report_stats.py summary <file> --where "Apple Identifier=<APP_ID>"
+report_stats.py money   <file> --where "SKU=<sku>" --by "Product Type Identifier"
+```
+
+Check the app count before trusting any total — `summary` without a filter
+lists `SKU` or `Title` under `groupable`, and more than one value there means
+the unfiltered totals are wrong for your purposes. Every command echoes the
+filter it applied and how many rows survived, so a filtered figure is never
+mistaken for the file's.
+
 The script refuses to work on a truncated file and exits non-zero. That is
 deliberate: re-fetch with a higher `maxLines` or a narrower window. Passing
 `--allow-truncated` to get past it turns every total in your report into a

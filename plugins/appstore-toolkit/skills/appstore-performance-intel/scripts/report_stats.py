@@ -19,11 +19,20 @@ the single worst failure mode here. Re-fetch with a higher maxLines (or a
 SUMMARY subtype) rather than passing --allow-truncated, which only exists for
 deliberately sampling the shape of a file.
 
+A Sales and Trends report covers the whole *vendor account*, not one app. If you
+ship more than one, every command needs --where to isolate the app you mean --
+otherwise `summary` totals every app you have and reads as though it were one:
+
+    --where "Apple Identifier=<APP_ID>"        # or SKU=..., Title=...
+
+Every command echoes the filter it applied and how many rows survived, so a
+filtered total can never be mistaken for the whole file.
+
 Usage:
-    python3 report_stats.py summary FILE [FILE ...]
-    python3 report_stats.py group   FILE --by COL[,COL] [--metric COL] [--top N]
-    python3 report_stats.py money   FILE [--by COL] [--top N]
-    python3 report_stats.py compare BASE CURRENT --by COL [--metric COL] [--top N]
+    python3 report_stats.py summary FILE [FILE ...] [--where COL=VALUE]
+    python3 report_stats.py group   FILE --by COL[,COL] [--metric COL] [--top N] [--where COL=VALUE]
+    python3 report_stats.py money   FILE [--by COL] [--top N] [--where COL=VALUE]
+    python3 report_stats.py compare BASE CURRENT --by COL [--metric COL] [--top N] [--where COL=VALUE]
 
 This script never makes network calls. Fetch the reports with the
 appstore-connect MCP and save what it returns.
@@ -278,7 +287,15 @@ def cmd_summary(args):
     for path in args.files:
         rows, columns, truncated, note = read_report(path)
         guard_truncation(path, truncated, note, args.allow_truncated)
+        total_rows = len(rows)
+        rows = apply_where(rows, args.where, columns)
         print("== %s" % path)
+        described = describe_filter(args.where, len(rows), total_rows)
+        if described:
+            print("   %s" % described)
+        if not rows:
+            print("   no rows survived --where -- check the value spelling.\n")
+            continue
         print("   rows: %d" % len(rows))
         col, first, last = date_span(rows)
         if col:
@@ -310,7 +327,15 @@ def cmd_summary(args):
     return 0
 
 
-def apply_where(rows, where):
+def apply_where(rows, where, columns=None):
+    """Filter rows by COL=VALUE clauses, all of which must match.
+
+    A misspelled column is called out rather than silently matching nothing:
+    `r.get(col, "")` returns "" for a column that does not exist, so every row
+    would be dropped and the result would look exactly like a value that is
+    genuinely absent. Those two need different fixes, so they get different
+    errors.
+    """
     if not where:
         return rows
     for clause in where:
@@ -318,16 +343,29 @@ def apply_where(rows, where):
             raise ReportError("--where takes COL=VALUE, got %r" % clause)
         col, _, wanted = clause.partition("=")
         col, wanted = col.strip(), wanted.strip()
+        if columns is not None and col not in columns:
+            raise ReportError(
+                "No column %r to filter on. Available: %s" % (col, ", ".join(columns))
+            )
         rows = [r for r in rows if str(r.get(col, "")).strip() == wanted]
     return rows
+
+
+def describe_filter(where, kept, total):
+    """One line naming the filter, so a filtered total is never read as the file's."""
+    if not where:
+        return None
+    return "filter: %s  -> %d of %d rows" % (" AND ".join(where), kept, total)
 
 
 def cmd_group(args):
     rows, columns, truncated, note = read_report(args.file)
     guard_truncation(args.file, truncated, note, args.allow_truncated)
-    rows = apply_where(rows, args.where)
+    total_rows = len(rows)
+    rows = apply_where(rows, args.where, columns)
     if not rows:
         raise ReportError("No rows left after --where. Check the value spelling.")
+    filter_line = describe_filter(args.where, len(rows), total_rows)
 
     by = [c.strip() for c in args.by.split(",")]
     for col in by:
@@ -346,6 +384,8 @@ def cmd_group(args):
         pairs.append(list(key) + [fmt(value), share])
 
     print("%s by %s -- %d rows" % (metric, ", ".join(by), counted))
+    if filter_line:
+        print(filter_line)
     if metric in NON_ADDITIVE:
         print(
             "NOTE: %s does not add up across rows (a device can appear in several).\n"
@@ -372,6 +412,11 @@ def cmd_money(args):
     """
     rows, columns, truncated, note = read_report(args.file)
     guard_truncation(args.file, truncated, note, args.allow_truncated)
+    total_rows = len(rows)
+    rows = apply_where(rows, args.where, columns)
+    if not rows:
+        raise ReportError("No rows left after --where. Check the value spelling.")
+    money_filter_line = describe_filter(args.where, len(rows), total_rows)
 
     if UNITS not in columns:
         raise ReportError(
@@ -406,7 +451,10 @@ def cmd_money(args):
         units = to_number(row.get(UNITS)) or 0.0
         if not units:
             continue
-        currency = str(row.get(currency_col, "")).strip() if currency_col else "?"
+        # Free rows carry no proceeds currency at all. Left blank it renders as
+        # an empty column that reads like corrupt data rather than "nothing was
+        # paid here", which is what it actually means.
+        currency = (str(row.get(currency_col, "")).strip() if currency_col else "?") or "(free)"
         key = (currency,) + tuple(
             str(row.get(col, "")).strip() or "(blank)" for col in by
         )
@@ -440,6 +488,8 @@ def cmd_money(args):
         pairs.append(row)
 
     col_name, first, last = date_span(rows)
+    if money_filter_line:
+        print(money_filter_line)
     if col_name:
         print("%s: %s .. %s" % (col_name, first, last))
     print(
@@ -479,6 +529,18 @@ def cmd_compare(args):
     guard_truncation(args.base, base_trunc, base_note, args.allow_truncated)
     guard_truncation(args.current, cur_trunc, cur_note, args.allow_truncated)
 
+    # The same filter is applied to both sides on purpose: comparing one app's
+    # month against the whole account's month is the kind of mistake that
+    # produces a confident, enormous, meaningless percentage.
+    base_total, cur_total = len(base_rows), len(cur_rows)
+    base_rows = apply_where(base_rows, args.where, base_cols)
+    cur_rows = apply_where(cur_rows, args.where, cur_cols)
+    if not base_rows or not cur_rows:
+        raise ReportError(
+            "No rows left after --where in %s. Check the value spelling."
+            % (args.base if not base_rows else args.current)
+        )
+
     by = [c.strip() for c in args.by.split(",")]
     for col in by:
         for cols, path in ((base_cols, args.base), (cur_cols, args.current)):
@@ -514,6 +576,9 @@ def cmd_compare(args):
     _, b_first, b_last = date_span(base_rows)
     _, c_first, c_last = date_span(cur_rows)
     print("%s by %s" % (metric, ", ".join(by)))
+    if args.where:
+        print("  %s" % describe_filter(args.where, len(base_rows), base_total))
+        print("  %s" % describe_filter(args.where, len(cur_rows), cur_total))
     if b_first:
         print("  base:    %s  %s .. %s" % (args.base, b_first, b_last))
     if c_first:
@@ -540,12 +605,24 @@ def main(argv=None):
         help="Proceed on a truncated report. Every total becomes a floor -- only "
         "use this to inspect the shape of a file, never to quote a number.",
     )
+    # --where belongs on every subcommand, not just `group`: a Sales report holds
+    # the whole vendor account, so isolating one app is a precondition for any
+    # correct total, not an optional refinement.
+    def add_where(p):
+        p.add_argument(
+            "--where",
+            action="append",
+            help="Filter as COL=VALUE, e.g. \"Apple Identifier=<APP_ID>\" or "
+            "\"SKU=<sku>\" to isolate one app. Repeatable; all clauses must match.",
+        )
+
     sub = parser.add_subparsers(dest="command", required=True)
 
     p_summary = sub.add_parser(
         "summary", help="Columns, row count, date span and every numeric total."
     )
     p_summary.add_argument("files", nargs="+")
+    add_where(p_summary)
     p_summary.set_defaults(func=cmd_summary)
 
     p_group = sub.add_parser("group", help="Sum a metric per dimension, ranked.")
@@ -553,9 +630,7 @@ def main(argv=None):
     p_group.add_argument("--by", required=True, help="Column(s) to group by, comma-separated.")
     p_group.add_argument("--metric", help="Column to sum. Auto-detected when omitted.")
     p_group.add_argument("--top", type=int, default=15, help="0 for all rows.")
-    p_group.add_argument(
-        "--where", action="append", help="Filter as COL=VALUE. Repeatable."
-    )
+    add_where(p_group)
     p_group.set_defaults(func=cmd_group)
 
     p_money = sub.add_parser(
@@ -564,6 +639,7 @@ def main(argv=None):
     p_money.add_argument("file")
     p_money.add_argument("--by", help="Extra column(s) to break down by.")
     p_money.add_argument("--top", type=int, default=15, help="0 for all rows.")
+    add_where(p_money)
     p_money.set_defaults(func=cmd_money)
 
     p_compare = sub.add_parser("compare", help="Per-row delta between two periods.")
@@ -572,6 +648,7 @@ def main(argv=None):
     p_compare.add_argument("--by", required=True)
     p_compare.add_argument("--metric")
     p_compare.add_argument("--top", type=int, default=15, help="0 for all rows.")
+    add_where(p_compare)
     p_compare.set_defaults(func=cmd_compare)
 
     args = parser.parse_args(argv)

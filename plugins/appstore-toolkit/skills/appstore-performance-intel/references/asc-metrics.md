@@ -170,11 +170,37 @@ roughly 52 weeks. On an app that has already shipped releases, only the snapshot
 can produce a funnel for any of them, and its window keeps rolling forward — a
 launch older than ~52 weeks is gone for good. Propose both on a first run.
 
+**A sales report is account-wide.** It holds every app the vendor ships, keyed
+by `SKU` / `Title` / `Apple Identifier`. There is no per-app filter on Apple's
+side — `/v1/salesReports` takes no app parameter — so the split has to happen
+after download. Use `report_stats.py --where "Apple Identifier=<APP_ID>"` on
+every command. An unfiltered total is the whole portfolio and looks identical to
+a single app's.
+
+**The vendor number cannot be discovered from the API.** There is no vendor
+resource in the App Store Connect API at all, so no tool can look one up for
+you. Two places to get it: Payments and Financial Reports in App Store Connect,
+or the filename of any report already downloaded from there, which embeds it as
+`S_<frequency>_<vendorNumber>_<date>.txt`. Note also that Apple answers a vendor
+number the key cannot read with a bare HTTP 500 `UNEXPECTED_ERROR`, identical to
+a real outage — the MCP server rewrites that to name the vendor number as the
+likely cause, but it stays ambiguous, so retry once before believing either
+diagnosis.
+
+**Start a sales pipeline with `app_store_connect_get_vendor_number`.** It cannot
+discover a number, but it reports the one configured, which layer supplied it
+(environment or config file), and whether Apple actually accepts it — one call
+that separates "not configured", "configured but wrong", and "configured and
+working" before you spend four report downloads finding out. Pass a candidate as
+`vendorNumber` to test one without saving it.
+
 **Sales reports need a vendor number.** They fail with "A vendor number is
-required" unless `APP_STORE_CONNECT_VENDOR_NUMBER` is set in the MCP server
-environment. It is found under Payments and Financial Reports in App Store
-Connect. If it is unset, say the revenue data was unavailable and why — do not
-quietly substitute analytics downloads for sales and call it revenue.
+required" unless one is set — `APP_STORE_CONNECT_VENDOR_NUMBER` in the MCP
+server environment, or a `vendorNumber` key in
+`~/.config/appstore-connect/config.json`, which is the better place for it since
+`.mcp.json` files are usually tracked by git. If it is unset, say the revenue
+data was unavailable and why — do not quietly substitute analytics downloads for
+sales and call it revenue.
 
 **An empty report is not an error.** Apple returns no rows for a date with no
 activity, and for dates before the app shipped. Check the app's release date
