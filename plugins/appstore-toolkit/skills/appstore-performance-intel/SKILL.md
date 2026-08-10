@@ -127,6 +127,19 @@ script reads that shape directly, and the `truncated` flag it carries is the one
 thing you cannot recover later. A report cut off at `maxLines` still sums to a
 plausible number.
 
+There is no pipe from a tool result to disk, so this is a transcription step, and
+transcription is where rows go missing silently. Guard it with the counts the
+response already carries: `dataRows` is the number of data rows, `rows` is that
+plus the header line. Assert one of them after writing the file —
+
+```python
+assert len(body) == payload["dataRows"]      # or: len(body) + 1 == payload["rows"]
+```
+
+— and a dropped row fails loudly instead of quietly shaving a total. If a
+response predates `dataRows` and only carries `rows`, remember it counts the
+header: 84 `rows` is 83 data rows.
+
 ## 3. Do the arithmetic in the script, not in your head
 
 ```bash
@@ -185,7 +198,15 @@ Territory` shows it in one line.
 4. **A composition change.** Did units rise because of updates rather than
    purchases? Did a price change move proceeds without moving units?
 5. **Apple's own reporting.** Late-arriving corrections, an empty date, a
-   changed report shape.
+   changed report shape — and a period that reads as zero because it was never
+   generated. `download_sales_report` answers a period with no rows as an
+   **HTTP 404**, `NOT_FOUND` / "There were no sales for the date specified". That
+   is Apple's empty answer, not a broken call, but it is also what a
+   not-yet-generated WEEKLY or MONTHLY looks like, and the two mean opposite
+   things. Separate them by asking a finer granularity for the same span: if the
+   WEEKLY 404s while DAILY reports inside that week return sales, the week is a
+   reporting lag and reporting it as zero would be flatly wrong. Only after the
+   dailies also come back empty is a zero real.
 
 If none of them holds, say the movement is unexplained. An honest "down 19% and
 I can't attribute it" is worth more than a confident guess, and it tells the

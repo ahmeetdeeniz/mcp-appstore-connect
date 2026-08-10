@@ -1374,6 +1374,44 @@ describe("reports require a vendor number", () => {
     // The genuine-outage case must stay reachable, not be asserted away.
     expect(text).toContain("retry");
   });
+
+  /**
+   * Apple answers a period with no rows with a 404, so the raw error reads as a
+   * broken call when it is actually data. The dangerous half is that the same
+   * 404 covers a period Apple has not assembled yet — a just-ended week can 404
+   * while its dailies have sales — so the message has to send the caller to the
+   * finer granularity rather than let them record a zero.
+   */
+  it("explains a 404 on a sales report as an empty-or-ungenerated period", async () => {
+    const fetchImpl = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            errors: [{ code: "NOT_FOUND", detail: "There were no sales for the date specified." }],
+          }),
+          { status: 404, headers: { "content-type": "application/json" } },
+        ),
+    );
+    const client = await connect(
+      { ...baseConfig, maxRetries: 0 },
+      fetchImpl as unknown as typeof fetch,
+    );
+
+    const result = await client.callTool({
+      name: "app_store_connect_download_sales_report",
+      arguments: { reportDate: "2026-08-09", frequency: "WEEKLY", vendorNumber: "85326407" },
+    });
+
+    expect(result.isError).toBe(true);
+    const text = (result.content as { text: string }[])[0]?.text ?? "";
+    // Names the period asked for, so the message is not generic.
+    expect(text).toContain("WEEKLY 2026-08-09");
+    // Says this is an answer, and clears the credentials it would otherwise implicate.
+    expect(text).toContain("not a fault");
+    // The disambiguation that stops a lag being written down as zero.
+    expect(text).toContain("DAILY");
+    expect(text).toContain("must not be reported as zero");
+  });
 });
 
 describe("get_vendor_number", () => {
@@ -1442,6 +1480,13 @@ describe("get_vendor_number", () => {
    * The inverted signal: a 404 is Apple saying "no sales that day", which it can
    * only say after resolving and authorising the vendor. Treating it as failure
    * would make a valid vendor number on a quiet account unverifiable.
+   */
+  /**
+   * Also guards a coupling that is easy to miss: `withEmptyPeriodHint` rewrites a
+   * 404 on the report-download tools into "no rows for this period", which would
+   * turn this successful verification into an error if it ever wrapped the probe.
+   * The probe calls the client directly to stay out of that path -- if this test
+   * starts failing with a message about DAILY granularity, that is why.
    */
   it("treats a no-sales 404 as proof the vendor number is readable", async () => {
     const fetchImpl = vi.fn(
@@ -1657,6 +1702,7 @@ describe("analytics reports", () => {
     const body = JSON.parse(textOf(result));
     expect(body.truncated).toBe(false);
     expect(body.rows).toBe(3); // content lines, not the phantom blank
+    expect(body.dataRows).toBe(2); // the same count without the header
     expect(body.report).toBe(CSV);
   });
 

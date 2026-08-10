@@ -202,6 +202,19 @@ server environment, or a `vendorNumber` key in
 data was unavailable and why — do not quietly substitute analytics downloads for
 sales and call it revenue.
 
-**An empty report is not an error.** Apple returns no rows for a date with no
-activity, and for dates before the app shipped. Check the app's release date
-before concluding that downloads collapsed.
+**An empty report arrives as a 404, and it is not an error.** For a period with
+no activity — including dates before the app shipped — Apple answers
+`/v1/salesReports` with **HTTP 404**, `NOT_FOUND`, "There were no sales for the
+date specified". So the tool call fails rather than returning zero rows, and that
+failure is data. Check the app's release date before concluding that downloads
+collapsed.
+
+The trap is that the same 404 is returned for a period Apple has not generated
+yet, and "no sales" and "not computed yet" mean opposite things. Weekly and
+monthly reports are assembled after the dailies, so a just-ended week can 404
+while every day inside it has sales. **Resolve it by dropping a granularity:**
+ask for DAILY reports spanning the same period. Sales in the dailies prove the
+coarser report is a lag artifact and must not be reported as a zero period; empty
+dailies confirm a real zero. On a multi-app vendor account this is quick to check
+— a 404 for a whole account that ships several apps is implausible on its face
+and should be treated as lag until the dailies say otherwise.

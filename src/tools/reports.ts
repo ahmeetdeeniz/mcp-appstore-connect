@@ -59,6 +59,12 @@ const previewReport = (tsv: string, maxLines: number): Record<string, unknown> =
     // Content lines with the header included, so this is one more than the
     // number of data rows.
     rows: count,
+    // The same count without the header, because `rows` reads as "data rows" to
+    // everyone who has not read this function. A caller verifying a transcription
+    // against `rows` is off by exactly one and concludes it dropped a row; both
+    // are published so neither reading can be wrong. Zero means Apple returned a
+    // header and nothing else.
+    dataRows: Math.max(0, count - 1),
     truncated,
     ...(truncated ? { note: `Showing first ${maxLines} of ${count} lines.` } : {}),
     // Untruncated output is handed back byte-for-byte. Only the sliced path
@@ -88,6 +94,39 @@ const withVendorHint = async <T>(vendor: string, fn: () => Promise<T>): Promise<
           `of a previously downloaded report's filename (S_<freq>_<vendorNumber>_<date>.txt). ` +
           `If the number is definitely right, retry — a genuine 5xx looks identical. ` +
           `Original: ${err.message}`,
+        { status: err.status, errors: err.errors },
+      );
+    }
+    throw err;
+  }
+};
+
+/**
+ * Apple reports "this period has no rows" as an HTTP 404, so a quiet month and a
+ * broken call are the same shape. Left raw it reads as a failure; reported as
+ * data it reads as a zero. Both are wrong often enough to matter, because the
+ * *same* 404 covers a third case: a period Apple has not assembled yet.
+ *
+ * Weekly and monthly reports are built after the dailies, so a week that just
+ * ended can 404 while every day inside it has sales — and "no sales" versus "not
+ * computed yet" are opposite conclusions about the same response. The caller
+ * cannot tell them apart from the status code, so the message names the check
+ * that can: ask for a finer granularity over the same span.
+ */
+const withEmptyPeriodHint = async <T>(period: string, fn: () => Promise<T>): Promise<T> => {
+  try {
+    return await fn();
+  } catch (err) {
+    if (err instanceof AppStoreConnectApiError && err.status === 404) {
+      throw new AppStoreConnectApiError(
+        `Apple returned no rows for ${period}. This is how it reports a period with no ` +
+          `activity — including dates before the app shipped — so it is an answer, not a ` +
+          `fault, and the vendor number and credentials are fine. Before recording a zero, ` +
+          `note that Apple returns this same 404 for a period it has not generated yet: ` +
+          `weekly and monthly reports are assembled after the dailies, so a recently ended ` +
+          `week can 404 while the days inside it have sales. Re-ask at DAILY granularity ` +
+          `across the same span — sales in the dailies mean this is reporting lag and must ` +
+          `not be reported as zero; empty dailies confirm a real zero. Original: ${err.message}`,
         { status: err.status, errors: err.errors },
       );
     }
@@ -257,7 +296,12 @@ export const registerReportTools = (
       description:
         "Download a sales & trends report (units, proceeds) as TSV. Reports lag ~24h and are " +
         "keyed by date: DAILY needs YYYY-MM-DD, WEEKLY the week-ending Sunday, MONTHLY YYYY-MM, " +
-        "YEARLY YYYY. Requires a vendor number.",
+        "YEARLY YYYY. Requires a vendor number. The report is account-wide — it holds every app " +
+        "the vendor ships, keyed by SKU / Title / Apple Identifier, and Apple offers no per-app " +
+        "filter, so totals must be filtered to one app after download or they span the whole " +
+        "portfolio. Units mix first-time downloads with free updates (see Product Type " +
+        "Identifier), and Developer Proceeds / Customer Price are per unit, not per row. A period " +
+        "with no rows comes back as a 404.",
       inputSchema: {
         reportDate: z
           .string()
@@ -286,13 +330,15 @@ export const registerReportTools = (
       wrap(async () => {
         const vendor = requireVendor(vendorNumber, ctx.vendorNumber);
         const tsv = await withVendorHint(vendor, () =>
-          client.downloadReport("/v1/salesReports", {
-            "filter[frequency]": frequency,
-            "filter[reportType]": reportType,
-            "filter[reportSubType]": reportSubType,
-            "filter[vendorNumber]": vendor,
-            "filter[reportDate]": reportDate,
-          }),
+          withEmptyPeriodHint(`${frequency} ${reportDate}`, () =>
+            client.downloadReport("/v1/salesReports", {
+              "filter[frequency]": frequency,
+              "filter[reportType]": reportType,
+              "filter[reportSubType]": reportSubType,
+              "filter[vendorNumber]": vendor,
+              "filter[reportDate]": reportDate,
+            }),
+          ),
         );
         return previewReport(tsv, maxLines);
       }),
@@ -322,12 +368,14 @@ export const registerReportTools = (
       wrap(async () => {
         const vendor = requireVendor(vendorNumber, ctx.vendorNumber);
         const tsv = await withVendorHint(vendor, () =>
-          client.downloadReport("/v1/financeReports", {
-            "filter[regionCode]": regionCode,
-            "filter[reportType]": "FINANCIAL",
-            "filter[vendorNumber]": vendor,
-            "filter[reportDate]": reportDate,
-          }),
+          withEmptyPeriodHint(`fiscal ${reportDate} in region ${regionCode}`, () =>
+            client.downloadReport("/v1/financeReports", {
+              "filter[regionCode]": regionCode,
+              "filter[reportType]": "FINANCIAL",
+              "filter[vendorNumber]": vendor,
+              "filter[reportDate]": reportDate,
+            }),
+          ),
         );
         return previewReport(tsv, maxLines);
       }),
