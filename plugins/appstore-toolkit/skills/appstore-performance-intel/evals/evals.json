@@ -3,6 +3,7 @@
   "fixtures": {
     "pixelwright-may-june": "Saved App Store Connect tool dumps for the app Pixelwright (id 1234567890) in evals/fixtures/: may-sales.json and june-sales.json (Sales and Trends SALES reports, TSV inside the tool-result JSON envelope, five territories across USD/EUR/GBP/JPY, per-unit Customer Price and Developer Proceeds columns, Product Type Identifier 1 for purchases and 7 for updates), plus may-engagement.json and june-engagement.json (Analytics App Store Discovery and Engagement, CSV, with Event values Impression and Page view, Source Type values App Store Search / App Store Browse / Web Referrer, and a Counts measure). Version 2.1 shipped on 12 June and the marketing site launched at the start of June. The data holds three traps at once: paid purchases are essentially flat (412 -> 398) while total Units leap from ~502 to ~8,100 because of a type-7 update flood; the money columns are per-unit so they must be weighted by Units; and four currencies are present that cannot be added. The real story is a discovery mix shift, search impressions -30% and web referrals +315%.",
     "pixelwright-truncated": "Only evals/fixtures/june-engagement-truncated.json is available: the same June engagement report, but the tool-result envelope says truncated: true with the note 'Showing first 500 of 901 lines.' Summing it yields roughly 55% of the real figure while looking entirely plausible. There is no untruncated copy on disk, so the only correct moves are to refuse to quote a total, or to state explicitly that the figure is a floor and say how to re-fetch.",
+    "pixelwright-iap": "Saved Sales and Trends dumps for Pixelwright (app id 1234567890, SKU PXW1) in evals/fixtures/: july-sales-iap.json and august-sales-iap.json. The app itself is free — every PXW1 row has Customer Price 0.00 — and all the revenue is in its in-app purchase, Pixelwright Pro. Those IA1-M rows carry the IAP's OWN Apple Identifier (9876543210) and its own SKU (PXW1-PRO); the app appears only in Parent Identifier, as the SKU string PXW1, never as the numeric app id. A third app (Atlas, 5550001111) shares the vendor account, so an unfiltered total is not this app's either. August covers 1–9 August only, so it is a partial period against July's full 31 days. Filtering to Apple Identifier=1234567890 yields a clean, non-truncated report whose proceeds are exactly 0.00, which is the wrong answer in the shape of a right one; --app 1234567890 yields 48.93 USD and 20.97 EUR.",
     "none": "No files. The question is about how App Store Connect's own numbers relate to each other, not about a specific dataset."
   },
   "evals": [
@@ -54,6 +55,24 @@
         "Proceeds (post-commission) are distinguished from customer spend",
         "download_finance_report is named as the authoritative source for what was actually paid",
         "Free type-7 update rows are not allowed to distort the revenue or per-unit price figures"
+      ]
+    },
+    {
+      "id": 4,
+      "name": "in-app-purchase-revenue-is-not-on-the-app-row",
+      "fixture": "pixelwright-iap",
+      "prompt": "has pixelwright made any money since we went free with the pro upgrade? july and august",
+      "expected_output": "Revenue is found and quoted: 48.93 USD and 20.97 EUR of estimated proceeds in July, per currency, from the IA1-M rows. The answer does NOT report the app as earning nothing. The identifier split is what makes this correct — in-app purchase rows carry the IAP's own Apple Identifier and name the app only in Parent Identifier, as the SKU — so either the MCP's appleIdentifier filter (which keeps child rows and reports inAppPurchaseRows) or report_stats.py --app is used, never a bare --where on Apple Identifier. August is a partial period (1–9 August) and is normalised per day rather than compared raw against July's 31 days, and any movement between the two is checked against noise before being explained.",
+      "assertions": [
+        "A non-zero revenue figure is reported; the app is not described as having earned nothing",
+        "In-app purchase rows are included, matched through Parent Identifier rather than the app's Apple Identifier",
+        "A bare --where \"Apple Identifier=1234567890\" is not used as the app filter, or its zero result is caught and corrected",
+        "The identifier split is stated as the reason the naive filter is wrong",
+        "USD and EUR proceeds are reported separately, not summed",
+        "The third app in the vendor account (Atlas) is excluded from the totals",
+        "August is treated as a partial period and normalised per day before being compared to July",
+        "Any July-to-August movement is tested against noise rather than quoted as a percentage change alone",
+        "The window is stated as explicit dates"
       ]
     },
     {

@@ -142,25 +142,44 @@ These are written reviews only, so treat them as directional signal, never as
 "the app's rating". A cluster of 1-stars that starts on a release date is worth
 more than the whole rest of the report.
 
-### Save each response to a file as you go
+### Save each report to a file with `savePath`
 
-Dump the tool result verbatim — the whole JSON, not just the report text. The
-script reads that shape directly, and the `truncated` flag it carries is the one
-thing you cannot recover later. A report cut off at `maxLines` still sums to a
-plausible number.
+Pass `savePath` on every download. All three report tools take it:
 
-There is no pipe from a tool result to disk, so this is a transcription step, and
-transcription is where rows go missing silently. Guard it with the counts the
-response already carries: `dataRows` is the number of data rows, `rows` is that
-plus the header line. Assert one of them after writing the file —
+```
+app_store_connect_download_sales_report            { …, savePath: "<abs>/reports/2026-07-sales.tsv" }
+app_store_connect_download_finance_report          { …, savePath: "<abs>/reports/2026-07-finance.tsv" }
+app_store_connect_download_analytics_report_segment{ …, savePath: "<abs>/reports/2026-07-engagement.csv" }
+```
+
+The file gets the report **in full**, and `maxLines` then only trims the copy
+inlined in the response. So `maxLines` stops being a correctness problem: set it
+low to keep the response small, and the saved file is still complete. When the
+inline copy is truncated the response says so explicitly, and `saved.dataRows`
+tells you what actually landed. Use an absolute path in or under the repo's
+scratch or report directory.
+
+This replaces retyping a report into a file by hand, which is where rows went
+missing — a report short one row still sums to a perfectly plausible number, and
+nothing downstream notices.
+
+If you ever do have to transcribe a response by hand, guard it with the counts
+the response already carries: `dataRows` is the number of data rows, `rows` is
+that plus the header line. Assert one of them after writing —
 
 ```python
 assert len(body) == payload["dataRows"]      # or: len(body) + 1 == payload["rows"]
 ```
 
-— and a dropped row fails loudly instead of quietly shaving a total. If a
-response predates `dataRows` and only carries `rows`, remember it counts the
-header: 84 `rows` is 83 data rows.
+— so a dropped row fails loudly instead of quietly shaving a total.
+
+**Read `filter.inAppPurchaseRows` on every sales response.** In-app purchase rows
+do not carry the app's Apple Identifier; the server matches them through
+`Parent Identifier` and reports how many it found. Zero on an app you know sells
+an IAP means either a genuinely empty period or an app with no rows of its own to
+derive the SKU from — the response's `note` says which, and in the second case
+you need to pass `sku`. See the identifier split in `references/asc-metrics.md`;
+getting this wrong reports a paid app as earning nothing.
 
 ## 3. Do the arithmetic in the script, not in your head
 
@@ -168,6 +187,7 @@ header: 84 `rows` is 83 data rows.
 python3 ${CLAUDE_SKILL_DIR}/scripts/report_stats.py summary <file>...
 python3 ${CLAUDE_SKILL_DIR}/scripts/report_stats.py group   <file> --by "Source Type" --where "Event=Impression"
 python3 ${CLAUDE_SKILL_DIR}/scripts/report_stats.py money   <file> --by "Product Type Identifier"
+python3 ${CLAUDE_SKILL_DIR}/scripts/report_stats.py rate    <previous> <current> --days <days so far>
 python3 ${CLAUDE_SKILL_DIR}/scripts/report_stats.py compare <previous> <current> --by Territory
 ```
 
@@ -179,12 +199,20 @@ different shape than you expected.
 **A sales report covers the whole vendor account, not one app.** If the account
 ships more than one, every row of every other app is in the same file, and an
 unfiltered `summary` totals all of them into a number that reads exactly like
-the app you asked about. Pass `--where` on every command:
+the app you asked about. Pass `--app` on every command:
 
 ```bash
-report_stats.py summary <file> --where "Apple Identifier=<APP_ID>"
-report_stats.py money   <file> --where "SKU=<sku>" --by "Product Type Identifier"
+report_stats.py summary <file> --app <APP_ID>
+report_stats.py money   <file> --app <APP_ID> --by "Product Type Identifier"
 ```
+
+**`--app`, never `--where "Apple Identifier=<APP_ID>"`.** An in-app purchase row
+carries the IAP's own Apple Identifier and names the app only in
+`Parent Identifier`, as the app's SKU — so the bare `--where` drops every
+purchase and hands back a clean, complete-looking report with the revenue
+removed. `--app` matches both, and prints the split it found
+(`9 direct, 3 in-app purchase via Parent Identifier io.mgcrea.SwiftR2`). Read
+that line: it is the check that the money is in your totals.
 
 Check the app count before trusting any total — `summary` without a filter
 lists `SKU` or `Title` under `groupable`, and more than one value there means
@@ -207,10 +235,39 @@ Trust its labels over your own mental arithmetic.
 Conversion is a division you do across two reports over the same window — state
 both sources when you quote it.
 
+**Normalise per day before comparing two periods.** Months are 27–31 days and the
+period you are reporting on is usually still in progress, so raw totals are not
+comparable. `rate` divides each period by its real length and prints per-day and
+per-30-day figures. Pass `--days` for the current period — the report's own dates
+span the whole month even when only nine days of it have happened, and without it
+two units in nine days reads as flat against last month's two rather than as more
+than three times the pace.
+
 ## 4. Explain the movement, don't just report it
 
-A table of numbers is not the deliverable. For anything that moved
-meaningfully, work the attribution in this order, stopping when one holds:
+A table of numbers is not the deliverable. But before explaining a movement,
+establish that there is one.
+
+**Is it real?** At App Store volumes a percentage does not answer that: 7 → 2
+units and 700 → 200 are both −71%, and only one of them is evidence. `rate`
+gives the Poisson probability that the change is noise, and the answer is
+frequently "it is" — a three-day run of zeros on a low-volume app came out at
+P = 34%, which is a quiet week, not a signal. Run it before you reach for a
+cause:
+
+```bash
+report_stats.py rate <previous> <current> --app <APP_ID> --days <days so far>
+```
+
+Under ~5% treat the movement as real and explain it. Over ~20% say the period
+was quiet and that the change is within normal variation, and do not attach a
+cause to it — an invented explanation for noise is worse than no explanation,
+because it survives into the next run as an established fact. In between, report
+it as weak and say so. Quote the sample sizes whenever they are small enough for
+a percentage to mislead.
+
+For anything that does move meaningfully, work the attribution in this order,
+stopping when one holds:
 
 1. **A release.** Line the change up against version dates from step 1.
 2. **A source shift.** `group --by "Source Type"` on both periods. Search
@@ -320,16 +377,30 @@ Store-side actions only, each one naming the number it comes from.
 What could not be measured and why — no vendor number, no analytics request,
 Apple's lag, a window with no data. This section is not optional.
 
+## Open question for next run
+
+The single unresolved thing this run leaves behind, and what would settle it.
+Replaced each run — if the last one is now answered, say so in the run log
+rather than keeping it here.
+
 ## Run log
 
 One bullet per run, newest first: the date, the window, the headline figure, and
 anything this run corrected in an earlier one.
 ```
 
-**Read the run log before pulling anything, and append to it last.** It is what
-turns a series of snapshots into a trend and stops the same movement being
-reported as new three runs running. A movement already recorded there is not
-news — say it is unchanged and spend the run on what is.
+**Read the run log and the open question before pulling anything, and append to
+the log last.** They are what turn a series of snapshots into a trend and stop
+the same movement being reported as new three runs running. A movement already
+recorded there is not news — say it is unchanged and spend the run on what is.
+
+**Always leave an open question, and answer the previous one first.** It is the
+highest-value thing to carry forward and the easiest to lose: a movement you
+could not attribute, a period Apple had not generated yet, a number that needed a
+report you could not reach. Make it specific enough to act on — "does the
+conversion dip hold once the July analytics instance lands" rather than "watch
+conversion". If the previous run's question is now answerable, answer it in the
+body and record the resolution in the run log.
 
 Each entry should survive being read a year later without the rest of the
 document: the window as explicit dates, the figure that mattered, and any
@@ -360,7 +431,11 @@ Do not paste the report. Re-render it, tighter:
   compressed, because what could not be measured is exactly what gets lost when a
   path is handed over — and a reader who does not know the funnel was missing will
   read the whole summary as more complete than it is. Include the sample sizes
-  here when they are small enough to make percentages misleading.
+  here when they are small enough to make percentages misleading, and say which
+  movements `rate` found indistinguishable from noise — a change the reader would
+  otherwise take as real.
+- **The open question for next run**, in one line. It is the thing most likely to
+  be acted on before the next run happens.
 - **Anything you wrote to the account**, with ids, if the run created an analytics
   report request or any other write.
 

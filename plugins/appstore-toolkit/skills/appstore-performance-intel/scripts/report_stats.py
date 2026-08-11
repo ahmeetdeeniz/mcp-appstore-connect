@@ -20,26 +20,41 @@ SUMMARY subtype) rather than passing --allow-truncated, which only exists for
 deliberately sampling the shape of a file.
 
 A Sales and Trends report covers the whole *vendor account*, not one app. If you
-ship more than one, every command needs --where to isolate the app you mean --
+ship more than one, every command needs --app to isolate the app you mean --
 otherwise `summary` totals every app you have and reads as though it were one:
 
-    --where "Apple Identifier=<APP_ID>"        # or SKU=..., Title=...
+    --app <APP_ID>                            # or the app's SKU
+
+Use --app, not --where "Apple Identifier=<APP_ID>". An in-app purchase row
+carries the IAP's own Apple Identifier and names the app only in
+`Parent Identifier`, as the app's SKU, so filtering on the app id drops every
+purchase and returns a complete-looking report with the revenue removed. --app
+matches both. --where remains for every other column.
 
 Every command echoes the filter it applied and how many rows survived, so a
 filtered total can never be mistaken for the whole file.
 
 Usage:
-    python3 report_stats.py summary FILE [FILE ...] [--where COL=VALUE]
-    python3 report_stats.py group   FILE --by COL[,COL] [--metric COL] [--top N] [--where COL=VALUE]
-    python3 report_stats.py money   FILE [--by COL] [--top N] [--where COL=VALUE]
-    python3 report_stats.py compare BASE CURRENT --by COL [--metric COL] [--top N] [--where COL=VALUE]
+    python3 report_stats.py summary FILE [FILE ...] [--app ID] [--where COL=VALUE]
+    python3 report_stats.py group   FILE --by COL[,COL] [--metric COL] [--top N] [--app ID]
+    python3 report_stats.py money   FILE [--by COL] [--top N] [--app ID]
+    python3 report_stats.py rate    FILE [FILE ...] [--metric COL] [--days N] [--app ID]
+    python3 report_stats.py compare BASE CURRENT --by COL [--metric COL] [--top N] [--app ID]
+
+`rate` is the one to reach for before explaining any movement: it normalises
+each period to a per-day rate (months are 27-31 days and the current one is
+always partial) and gives the Poisson probability that the change between two
+periods is noise. At App Store volumes a percentage does not answer that --
+7 -> 2 units and 700 -> 200 are both -71%, and only one is evidence.
 
 This script never makes network calls. Fetch the reports with the
 appstore-connect MCP and save what it returns.
 """
 
 import argparse
+import datetime
 import json
+import math
 import re
 import sys
 
@@ -77,6 +92,14 @@ PER_UNIT_PRICE = "Customer Price"
 PER_UNIT_PROCEEDS = "Developer Proceeds"
 UNITS = "Units"
 PRODUCT_TYPE = "Product Type Identifier"
+
+# The three columns that identify an app -- and the split that makes --app
+# necessary. An in-app purchase row puts the IAP's own id in `Apple Identifier`
+# and the IAP's own SKU in `SKU`; the app appears only in `Parent Identifier`,
+# and there it is the app's SKU string, never its numeric id. See apply_app.
+APPLE_ID = "Apple Identifier"
+SKU = "SKU"
+PARENT = "Parent Identifier"
 
 # Summing either of these straight is meaningless -- that is what `money` is
 # for. Hiding them from `summary` is worse though: a file with money in it that
@@ -287,14 +310,12 @@ def cmd_summary(args):
     for path in args.files:
         rows, columns, truncated, note = read_report(path)
         guard_truncation(path, truncated, note, args.allow_truncated)
-        total_rows = len(rows)
-        rows = apply_where(rows, args.where, columns)
+        rows, filter_lines = apply_filters(rows, args, columns)
         print("== %s" % path)
-        described = describe_filter(args.where, len(rows), total_rows)
-        if described:
-            print("   %s" % described)
+        for line in filter_lines:
+            print("   %s" % line)
         if not rows:
-            print("   no rows survived --where -- check the value spelling.\n")
+            print("   no rows survived the filter -- check the value spelling.\n")
             continue
         print("   rows: %d" % len(rows))
         col, first, last = date_span(rows)
@@ -358,14 +379,91 @@ def describe_filter(where, kept, total):
     return "filter: %s  -> %d of %d rows" % (" AND ".join(where), kept, total)
 
 
+def apply_app(rows, app, columns):
+    """Keep one app's rows INCLUDING its in-app purchases. Returns (rows, note).
+
+    The reason this exists rather than --where "Apple Identifier=<APP_ID>": an
+    in-app purchase row does not carry its app's Apple Identifier. It carries the
+    IAP's own id and its own SKU, and names the app only in `Parent Identifier`,
+    as the app's SKU string. So filtering on the app id drops every IA1 / IA1-M
+    row, and what comes back is not an error or an empty file -- it is a clean,
+    plausible, complete-looking report whose in-app revenue is exactly zero. Two
+    real runs of this skill came one probe away from publishing "this app has
+    never earned anything" off exactly that.
+
+    The app's SKU does not have to be supplied: it is already on the app's own
+    rows, so a first pass over the direct matches yields the key the second pass
+    needs. An app with no rows of its own in the period is the one case that
+    cannot self-heal, and it is called out rather than quietly returning less.
+    """
+    if not app:
+        return rows, None
+    if columns is not None and APPLE_ID not in columns and SKU not in columns:
+        raise ReportError(
+            "This report has neither an %r nor a %r column, so it cannot be "
+            "filtered to one app. Columns: %s" % (APPLE_ID, SKU, ", ".join(columns))
+        )
+
+    direct = set()
+    for i, row in enumerate(rows):
+        if str(row.get(APPLE_ID, "")).strip() == app or str(row.get(SKU, "")).strip() == app:
+            direct.add(i)
+
+    skus = {str(rows[i].get(SKU, "")).strip() for i in direct}
+    skus.discard("")
+
+    has_parent = columns is None or PARENT in columns
+    children = set()
+    if has_parent and skus:
+        for i, row in enumerate(rows):
+            if i not in direct and str(row.get(PARENT, "")).strip() in skus:
+                children.add(i)
+
+    kept = [row for i, row in enumerate(rows) if i in direct or i in children]
+    label = "app %s: %d of %d rows" % (app, len(kept), len(rows))
+
+    if not has_parent:
+        note = "%s (no %r column in this file, so it holds no in-app purchases)" % (label, PARENT)
+    elif not direct:
+        parents = sorted(
+            {str(r.get(PARENT, "")).strip() for r in rows if str(r.get(PARENT, "")).strip()}
+        )
+        note = (
+            "%s -- nothing carries that Apple Identifier or SKU, so its SKU could "
+            "not be read off the file and no in-app purchase rows could be matched. "
+            "%r values present: %s" % (label, PARENT, ", ".join(parents) or "none")
+        )
+    else:
+        note = "%s (%d direct, %d in-app purchase via %s %s)" % (
+            label,
+            len(direct),
+            len(children),
+            PARENT,
+            ", ".join(sorted(skus)),
+        )
+    return kept, note
+
+
+def apply_filters(rows, args, columns):
+    """--app then --where, with a description line for each so neither is invisible."""
+    lines = []
+    rows, app_note = apply_app(rows, getattr(args, "app", None), columns)
+    if app_note:
+        lines.append(app_note)
+    before_where = len(rows)
+    rows = apply_where(rows, args.where, columns)
+    where_line = describe_filter(args.where, len(rows), before_where)
+    if where_line:
+        lines.append(where_line)
+    return rows, lines
+
+
 def cmd_group(args):
     rows, columns, truncated, note = read_report(args.file)
     guard_truncation(args.file, truncated, note, args.allow_truncated)
-    total_rows = len(rows)
-    rows = apply_where(rows, args.where, columns)
+    rows, filter_lines = apply_filters(rows, args, columns)
     if not rows:
-        raise ReportError("No rows left after --where. Check the value spelling.")
-    filter_line = describe_filter(args.where, len(rows), total_rows)
+        raise ReportError("No rows left after the filter. Check the value spelling.")
 
     by = [c.strip() for c in args.by.split(",")]
     for col in by:
@@ -384,8 +482,8 @@ def cmd_group(args):
         pairs.append(list(key) + [fmt(value), share])
 
     print("%s by %s -- %d rows" % (metric, ", ".join(by), counted))
-    if filter_line:
-        print(filter_line)
+    for line in filter_lines:
+        print(line)
     if metric in NON_ADDITIVE:
         print(
             "NOTE: %s does not add up across rows (a device can appear in several).\n"
@@ -412,11 +510,9 @@ def cmd_money(args):
     """
     rows, columns, truncated, note = read_report(args.file)
     guard_truncation(args.file, truncated, note, args.allow_truncated)
-    total_rows = len(rows)
-    rows = apply_where(rows, args.where, columns)
+    rows, money_filter_lines = apply_filters(rows, args, columns)
     if not rows:
-        raise ReportError("No rows left after --where. Check the value spelling.")
-    money_filter_line = describe_filter(args.where, len(rows), total_rows)
+        raise ReportError("No rows left after the filter. Check the value spelling.")
 
     if UNITS not in columns:
         raise ReportError(
@@ -488,8 +584,8 @@ def cmd_money(args):
         pairs.append(row)
 
     col_name, first, last = date_span(rows)
-    if money_filter_line:
-        print(money_filter_line)
+    for line in money_filter_lines:
+        print(line)
     if col_name:
         print("%s: %s .. %s" % (col_name, first, last))
     print(
@@ -523,6 +619,205 @@ def cmd_money(args):
     return 0
 
 
+def parse_date(value):
+    """Apple spells dates two ways: 07/31/2026 in Sales, 2026-07-31 in Analytics."""
+    value = str(value).strip()
+    for pattern in ("%m/%d/%Y", "%Y-%m-%d"):
+        try:
+            return datetime.datetime.strptime(value, pattern).date()
+        except ValueError:
+            continue
+    return None
+
+
+def window(rows):
+    """The real calendar span of a report, as (first, last, days).
+
+    Not `date_span`: on a MONTHLY sales report every row carries the same
+    `Begin Date`, so the min/max of one column is a single day and the period
+    looks 1 day long. The pair of columns is what describes the window, and
+    getting this wrong is the whole point of the command -- a rate divided by 1
+    instead of 31 is off by a factor of 31.
+    """
+    starts = [parse_date(r.get("Begin Date", "")) for r in rows]
+    ends = [parse_date(r.get("End Date", "")) for r in rows]
+    starts = [d for d in starts if d]
+    ends = [d for d in ends if d]
+    if starts and ends:
+        first, last = min(starts), max(ends)
+    else:
+        singles = [parse_date(r.get("Date", "")) for r in rows]
+        singles = [d for d in singles if d]
+        if not singles:
+            return None, None, None
+        first, last = min(singles), max(singles)
+    return first, last, (last - first).days + 1
+
+
+def poisson_cdf(k, lam):
+    """P(X <= k) for X ~ Poisson(lam), summed in log space so lam can be large."""
+    if k < 0:
+        return 0.0
+    if lam <= 0:
+        return 1.0
+    # Beyond this the sum is both slow and pointless: the distribution is
+    # indistinguishable from a normal, and counts this size are never the
+    # small-number question this command exists for.
+    if lam > 20000 or k > 20000:
+        z = (k + 0.5 - lam) / math.sqrt(lam)
+        return 0.5 * (1.0 + math.erf(z / math.sqrt(2.0)))
+    total = 0.0
+    for i in range(int(k) + 1):
+        total += math.exp(-lam + i * math.log(lam) - math.lgamma(i + 1))
+    return min(1.0, total)
+
+
+def poisson_verdict(observed, expected):
+    """Is a movement of this size distinguishable from noise? (tail, p, words).
+
+    Counts of app units are Poisson-ish: independent purchases arriving at some
+    rate. That is the model that answers the question the skill actually needs --
+    "is 7 -> 2 a real fall or is it seven coin flips" -- and at these volumes it
+    is not answerable by staring at a percentage. A drop from 7 to 2 is -71%, and
+    so is a drop from 700 to 200; only one of them is evidence.
+
+    `tail` is one-sided, in the direction the count actually moved, because the
+    question is directional. `p` doubles it for the two-sided test, which is what
+    the verdict is based on -- the conservative of the two readings.
+    """
+    if expected <= 0:
+        return None, None, "no base rate to compare against"
+    if observed <= expected:
+        tail = poisson_cdf(observed, expected)
+    else:
+        tail = 1.0 - poisson_cdf(observed - 1, expected)
+    p = min(1.0, 2.0 * tail)
+    if p < 0.05:
+        words = "unlikely to be noise -- worth explaining"
+    elif p < 0.2:
+        words = "weak signal; note it, do not build on it"
+    else:
+        words = "indistinguishable from noise at this volume"
+    return tail, p, words
+
+
+def cmd_rate(args):
+    """Per-day rates, and whether a change between periods is real.
+
+    Two things the skill kept needing and kept hand-rolling. Months are 27-31
+    days and the current one is always partial, so raw period totals are not
+    comparable: 2 units in 9 days of August is over three times July's pace, and
+    reads as flat against July's 2. And at these volumes a percentage does not
+    say whether anything happened -- both real runs of this skill had to work out
+    a Poisson tail by hand to tell a signal (7 -> 2, ~3%) from one that was not
+    (a three-day zero, P = 34%).
+    """
+    periods = []
+    for path in args.files:
+        rows, columns, truncated, note = read_report(path)
+        guard_truncation(path, truncated, note, args.allow_truncated)
+        rows, filter_lines = apply_filters(rows, args, columns)
+        if not rows:
+            raise ReportError("No rows left after the filter in %s." % path)
+
+        metric = args.metric or (UNITS if UNITS in columns else pick_metric(rows, columns, None))
+        if metric not in columns:
+            raise ReportError("No column %r in %s." % (metric, path))
+        # A rate is a count per day, and the Poisson test below assumes counts.
+        # Money is neither: proceeds are per-unit here, and "3.49 events" is not
+        # a thing. Refusing beats printing a confident number about nothing.
+        if metric in PER_UNIT_COLUMNS:
+            raise ReportError(
+                "%r is a PER-UNIT money column, not a count, so a rate and a "
+                "significance test on it are meaningless. Use --metric %s, or "
+                "`money` for the revenue question." % (metric, UNITS)
+            )
+        if metric in NON_ADDITIVE:
+            raise ReportError(
+                "%r does not add up across rows, so it has no per-day rate. "
+                "Use --metric %s." % (metric, UNITS)
+            )
+
+        total = sum(to_number(r.get(metric)) or 0.0 for r in rows)
+        first, last, days = window(rows)
+        # --days applies to the LAST file only. It exists for a period still in
+        # progress, and that is always the newest one; applying it to the base
+        # too would rescale the very rate being compared against and quietly
+        # invert the answer.
+        overridden = bool(args.days) and path == args.files[-1]
+        if overridden:
+            days = args.days
+        if not days:
+            raise ReportError(
+                "No parseable date column in %s, so the window length is unknown. "
+                "Pass --days N to state it." % path
+            )
+        periods.append(
+            {
+                "path": path,
+                "metric": metric,
+                "total": total,
+                "days": days,
+                "first": first,
+                "last": last,
+                "overridden": overridden,
+                "filters": filter_lines,
+            }
+        )
+
+    for period in periods:
+        print("== %s" % period["path"])
+        for line in period["filters"]:
+            print("   %s" % line)
+        # The report's own dates span the whole month even when only part of it
+        # has happened, so an overridden count has to say it overrode them --
+        # otherwise the line reads as a 31-day window measured over 9 days.
+        suffix = " days, from --days -- period still in progress)" if period["overridden"] else " days)"
+        if period["first"]:
+            print("   window: %s .. %s  (%d%s" % (period["first"], period["last"], period["days"], suffix))
+        else:
+            print("   window: %d%s" % (period["days"], suffix))
+        rate = period["total"] / period["days"]
+        print(
+            "   %s: %s   ->  %.3f/day   %.1f/30d"
+            % (period["metric"], fmt(period["total"]), rate, rate * 30)
+        )
+        print()
+
+    # A partial current period is the normal case -- Apple has not finished the
+    # month yet -- and it is exactly where a raw comparison misleads, so the
+    # per-day rate is what gets compared, never the totals.
+    for earlier, later in zip(periods, periods[1:]):
+        base_rate = earlier["total"] / earlier["days"]
+        expected = base_rate * later["days"]
+        observed = later["total"]
+        pace = (observed / later["days"]) / base_rate if base_rate else None
+        tail, p, words = poisson_verdict(observed, expected)
+
+        print("%s -> %s" % (earlier["path"], later["path"]))
+        print(
+            "   base rate    %.3f %s/day  (%s over %d days)"
+            % (base_rate, earlier["metric"], fmt(earlier["total"]), earlier["days"])
+        )
+        print(
+            "   observed     %s over %d days  (expected %.2f at the base rate)"
+            % (fmt(observed), later["days"], expected)
+        )
+        if pace is not None:
+            print("   pace         %.2fx the earlier rate" % pace)
+        if tail is None:
+            print("   %s" % words)
+        else:
+            direction = "<=" if observed <= expected else ">="
+            print(
+                "   P(%s %s | rate %.2f) = %.1f%% one-sided, %.1f%% two-sided"
+                % (direction, fmt(observed), expected, 100.0 * tail, 100.0 * p)
+            )
+            print("   -> %s" % words)
+        print()
+    return 0
+
+
 def cmd_compare(args):
     base_rows, base_cols, base_trunc, base_note = read_report(args.base)
     cur_rows, cur_cols, cur_trunc, cur_note = read_report(args.current)
@@ -532,12 +827,11 @@ def cmd_compare(args):
     # The same filter is applied to both sides on purpose: comparing one app's
     # month against the whole account's month is the kind of mistake that
     # produces a confident, enormous, meaningless percentage.
-    base_total, cur_total = len(base_rows), len(cur_rows)
-    base_rows = apply_where(base_rows, args.where, base_cols)
-    cur_rows = apply_where(cur_rows, args.where, cur_cols)
+    base_rows, base_filter_lines = apply_filters(base_rows, args, base_cols)
+    cur_rows, cur_filter_lines = apply_filters(cur_rows, args, cur_cols)
     if not base_rows or not cur_rows:
         raise ReportError(
-            "No rows left after --where in %s. Check the value spelling."
+            "No rows left after the filter in %s. Check the value spelling."
             % (args.base if not base_rows else args.current)
         )
 
@@ -576,9 +870,10 @@ def cmd_compare(args):
     _, b_first, b_last = date_span(base_rows)
     _, c_first, c_last = date_span(cur_rows)
     print("%s by %s" % (metric, ", ".join(by)))
-    if args.where:
-        print("  %s" % describe_filter(args.where, len(base_rows), base_total))
-        print("  %s" % describe_filter(args.where, len(cur_rows), cur_total))
+    for line in base_filter_lines:
+        print("  base:    %s" % line)
+    for line in cur_filter_lines:
+        print("  current: %s" % line)
     if b_first:
         print("  base:    %s  %s .. %s" % (args.base, b_first, b_last))
     if c_first:
@@ -605,15 +900,23 @@ def main(argv=None):
         help="Proceed on a truncated report. Every total becomes a floor -- only "
         "use this to inspect the shape of a file, never to quote a number.",
     )
-    # --where belongs on every subcommand, not just `group`: a Sales report holds
-    # the whole vendor account, so isolating one app is a precondition for any
-    # correct total, not an optional refinement.
+    # --app and --where belong on every subcommand, not just `group`: a Sales
+    # report holds the whole vendor account, so isolating one app is a
+    # precondition for any correct total, not an optional refinement.
     def add_where(p):
+        p.add_argument(
+            "--app",
+            help="Isolate one app by its Apple Identifier or SKU, INCLUDING its "
+            "in-app purchases -- those rows carry the IAP's own identifier and "
+            "name the app only in Parent Identifier, as the SKU, so a plain "
+            "--where on Apple Identifier silently drops all of them.",
+        )
         p.add_argument(
             "--where",
             action="append",
-            help="Filter as COL=VALUE, e.g. \"Apple Identifier=<APP_ID>\" or "
-            "\"SKU=<sku>\" to isolate one app. Repeatable; all clauses must match.",
+            help="Filter as COL=VALUE, e.g. \"Country Code=US\". Repeatable; all "
+            "clauses must match. To isolate an app use --app, which also keeps "
+            "its in-app purchase rows.",
         )
 
     sub = parser.add_subparsers(dest="command", required=True)
@@ -641,6 +944,22 @@ def main(argv=None):
     p_money.add_argument("--top", type=int, default=15, help="0 for all rows.")
     add_where(p_money)
     p_money.set_defaults(func=cmd_money)
+
+    p_rate = sub.add_parser(
+        "rate",
+        help="Per-day rates, and whether a change between periods is real or noise.",
+    )
+    p_rate.add_argument("files", nargs="+", help="Oldest first; each is compared to the previous.")
+    p_rate.add_argument("--metric", help="Column to count. Defaults to Units.")
+    p_rate.add_argument(
+        "--days",
+        type=int,
+        help="Window length of the LAST file, overriding its own dates. Needed for "
+        "a period still in progress: its trailing zero-activity days are invisible "
+        "in the report, so August measured to the 9th looks like a full month.",
+    )
+    add_where(p_rate)
+    p_rate.set_defaults(func=cmd_rate)
 
     p_compare = sub.add_parser("compare", help="Per-row delta between two periods.")
     p_compare.add_argument("base", help="The earlier report.")

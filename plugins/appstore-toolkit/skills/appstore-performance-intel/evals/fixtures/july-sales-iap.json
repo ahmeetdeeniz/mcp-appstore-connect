@@ -1,0 +1,6 @@
+{
+  "rows": 6,
+  "dataRows": 5,
+  "truncated": false,
+  "report": "Provider\tProvider Country\tSKU\tDeveloper\tTitle\tVersion\tProduct Type Identifier\tUnits\tDeveloper Proceeds\tBegin Date\tEnd Date\tCustomer Currency\tCountry Code\tCurrency of Proceeds\tApple Identifier\tCustomer Price\tParent Identifier\nAPPLE\tUS\tPXW1\tMgcrea\tPixelwright\t2.1\t1\t4\t0.00\t07/01/2026\t07/31/2026\tUSD\tUS\tUSD\t1234567890\t0.00\t\nAPPLE\tUS\tPXW1\tMgcrea\tPixelwright\t2.1\t1\t3\t0.00\t07/01/2026\t07/31/2026\tEUR\tFR\tEUR\t1234567890\t0.00\t\nAPPLE\tUS\tPXW1-PRO\tMgcrea\tPixelwright Pro\t2.1\tIA1-M\t7\t6.99\t07/01/2026\t07/31/2026\tUSD\tUS\tUSD\t9876543210\t9.99\tPXW1\nAPPLE\tUS\tPXW1-PRO\tMgcrea\tPixelwright Pro\t2.1\tIA1-M\t3\t6.99\t07/01/2026\t07/31/2026\tEUR\tFR\tEUR\t9876543210\t9.99\tPXW1\nAPPLE\tUS\tATLAS1\tMgcrea\tAtlas\t2.1\t1\t940\t0.00\t07/01/2026\t07/31/2026\tUSD\tUS\tUSD\t5550001111\t0.00\t\n"
+}

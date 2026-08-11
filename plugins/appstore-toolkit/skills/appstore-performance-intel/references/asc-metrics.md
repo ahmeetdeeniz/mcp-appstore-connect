@@ -131,6 +131,40 @@ release day and looks like a sales surge — it is the existing base updating. S
 by `Product Type Identifier` before quoting units, and quote the `1` rows when the
 question is acquisition.
 
+**An in-app purchase row does not carry its app's Apple Identifier.** This is the
+single most expensive trap in this document, so read the row shape before
+filtering anything. An `IA1` / `IA1-M` row carries:
+
+| Column              | Holds                                                     |
+| ------------------- | --------------------------------------------------------- |
+| `Apple Identifier`  | the **IAP's** own numeric id, e.g. `6762885916`           |
+| `SKU`               | the **IAP's** own SKU, e.g. `io.mgcrea.SwiftR2.pro`       |
+| `Parent Identifier` | the app — **as its SKU string**, e.g. `io.mgcrea.SwiftR2` |
+
+So the app's numeric id appears nowhere on the row that holds the money, and the
+one column that does name the app holds a SKU, not an id. Filter a report to
+`Apple Identifier=<APP_ID>` and every purchase disappears. What comes back is not
+an error and not an empty file: it is a clean, plausible, non-truncated report
+whose IAP revenue is exactly zero. Nothing about it looks wrong. Two separate runs
+of this skill came one probe away from publishing "this app has never earned
+anything" off precisely that report, and a paid app that later went
+free-with-IAP is the case where the wrong answer is the confident inverse of the
+right one.
+
+Two ways through, in order of preference:
+
+1. **Let the MCP do it.** `download_sales_report` matches child rows through
+   `Parent Identifier` by default and reports `inAppPurchaseRows` and the
+   `parentSkus` it keyed on. Read those two fields — `inAppPurchaseRows: 0` on an
+   app you know sells an IAP means the period is genuinely empty, or that the app
+   had no rows of its own to read the SKU off, and the response says which.
+2. **`report_stats.py --app <APP_ID>`** when working a file by hand. It applies the
+   same derivation — direct rows by id or SKU, then children whose
+   `Parent Identifier` matches those rows' SKU — and prints the split.
+
+Never hand-roll this with `--where "Apple Identifier=…"`. That filter is correct
+only for the app's own units, and silently wrong for every question about money.
+
 ## Why the numbers disagree
 
 Expect this question and answer it before it is asked:
@@ -185,9 +219,13 @@ launch older than ~52 weeks is gone for good. Propose both on a first run.
 **A sales report is account-wide.** It holds every app the vendor ships, keyed
 by `SKU` / `Title` / `Apple Identifier`. There is no per-app filter on Apple's
 side — `/v1/salesReports` takes no app parameter — so the split has to happen
-after download. Use `report_stats.py --where "Apple Identifier=<APP_ID>"` on
-every command. An unfiltered total is the whole portfolio and looks identical to
-a single app's.
+after download. Pass `appleIdentifier` to `download_sales_report`, and
+`report_stats.py --app <APP_ID>` on every command against a file. An unfiltered
+total is the whole portfolio and looks identical to a single app's.
+
+`--app` rather than `--where "Apple Identifier=<APP_ID>"`, always: the bare
+`--where` is the in-app purchase trap above, and it fails by returning a
+well-formed report with the revenue removed.
 
 **The vendor number cannot be discovered from the API.** There is no vendor
 resource in the App Store Connect API at all, so no tool can look one up for
