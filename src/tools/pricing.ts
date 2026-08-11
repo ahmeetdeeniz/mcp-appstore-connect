@@ -7,6 +7,7 @@ import {
   includedOf,
   relatedId,
   resourceOf,
+  resourcesOf,
   summarizeResponse,
 } from "../client/shape.js";
 import {
@@ -26,6 +27,24 @@ import {
 // STATE_ERROR.APP_PRICING_REQUIRED with no pointer to which resource is meant.
 // A free app still has to say so — "free" is a price point, not the absence of
 // one, which is why an app nobody ever charged for is still blocked.
+
+/**
+ * Apple's own maximum for the manualPrices endpoints. It comfortably exceeds the
+ * ~175 territories a fully manual schedule can name, so one page is the whole
+ * schedule in practice — but `manualPriceNote` says so rather than assuming it.
+ */
+export const MANUAL_PRICE_LIMIT = 200;
+
+/** Never let a page read as the whole schedule when it might not be. */
+export const manualPriceNote = (response: unknown): { manualPricesNote?: string } =>
+  resourcesOf(response).length >= MANUAL_PRICE_LIMIT
+    ? {
+        manualPricesNote:
+          `Exactly ${MANUAL_PRICE_LIMIT} prices came back, which is Apple's page maximum, so ` +
+          `this list may be incomplete. Read the schedule's manualPrices directly if the ` +
+          `missing territories matter.`,
+      }
+    : {};
 
 /**
  * A price point id names a fixed amount in one territory, so pricing an app with
@@ -57,24 +76,30 @@ const assertPricePointBelongs = async (
 };
 
 /**
- * Flatten a price schedule's `manualPrices` into rows that carry the actual money.
+ * Flatten a `manualPrices` collection into rows that carry the actual money.
  *
  * An `appPrice` / `inAppPurchasePrice` has almost no attributes of its own: the
  * amount lives on the related price point and the territory on a related
- * territory, so both are reachable only by sideloading. Ask for `manualPrices`
- * alone — as this did — and Apple returns neither relationship, `relatedId`
- * yields `undefined` at every hop, and `JSON.stringify` drops undefined keys, so
- * `territory` and `pricePointId` do not come back *absent*, they come back
- * invisible. The result is a price schedule that answers "what does this app
- * cost" with an opaque id and nothing else, leaving the caller to base64-decode
- * the id or page hundreds of price points to find out that the app is free.
+ * territory, so both are reachable only by sideloading. Ask for the prices alone
+ * and Apple returns neither relationship, `relatedId` yields `undefined` at every
+ * hop, and `JSON.stringify` drops undefined keys, so `territory` and
+ * `pricePointId` do not come back *absent*, they come back invisible. The result
+ * is a price schedule that answers "what does this app cost" with an opaque id
+ * and nothing else, leaving the caller to base64-decode the id or page hundreds
+ * of price points to find out that the app is free.
  *
- * Inlining `customerPrice` and `proceeds` from the sideloaded price point makes
- * the one call that claims to answer the question actually answer it.
+ * The sideload cannot happen on the schedule resource. `GET
+ * /v1/apps/{id}/appPriceSchedule` accepts exactly `app`, `baseTerritory`,
+ * `manualPrices` and `automaticPrices` as `include` values — no nested paths, and
+ * not even a `fields[appPricePoints]` to hang them off — so asking it for
+ * `manualPrices.appPricePoint` is an HTTP 400, not a deeper answer. The same is
+ * true of `/v2/inAppPurchases/{id}/iapPriceSchedule`. The prices therefore have
+ * to be fetched from the schedule's own `manualPrices` endpoint, which does take
+ * `include=appPricePoint,territory`, and this reads that second response: rows in
+ * `data`, price points sideloaded in `included`.
  */
 export const manualPriceRows = (
   response: unknown,
-  priceType: string,
   pricePointRelationship: string,
   pricePointType: string,
 ): Record<string, unknown>[] => {
@@ -83,7 +108,7 @@ export const manualPriceRows = (
     if (typeof point.id === "string") pricePoints.set(point.id, attributesOf(point));
   }
 
-  return includedOf(response, priceType).map((price) => {
+  return resourcesOf(response).map((price) => {
     const pricePointId = relatedId(price, pricePointRelationship);
     const point = pricePointId === undefined ? undefined : pricePoints.get(pricePointId);
     return {
@@ -147,12 +172,12 @@ export const registerPricingTools = (
     },
     async ({ appId }) =>
       wrap(async () => {
-        // The schedule resource carries nothing but relationships, so the prices
-        // only exist in `included` — summarizeResponse alone would return an id
-        // and no prices at all. The nested includes are what make each price
-        // legible; see manualPriceRows.
+        // The schedule resource carries nothing but relationships, so a price is
+        // only legible once its price point is sideloaded — and that sideload is
+        // not available here, only on the manualPrices endpoint. See
+        // manualPriceRows for why this is two calls and not one include.
         const response = await getOrNull(client, `/v1/apps/${appId}/appPriceSchedule`, {
-          include: "manualPrices.appPricePoint,manualPrices.territory,baseTerritory",
+          include: "baseTerritory",
         });
         if (response === null) {
           return {
@@ -163,11 +188,16 @@ export const registerPricingTools = (
           };
         }
         const schedule = resourceOf(response);
+        const prices = await client.get(`/v1/appPriceSchedules/${schedule.id}/manualPrices`, {
+          include: "appPricePoint,territory",
+          limit: MANUAL_PRICE_LIMIT,
+        });
 
         return {
           scheduleId: schedule.id,
           baseTerritory: relatedId(schedule, "baseTerritory"),
-          manualPrices: manualPriceRows(response, "appPrices", "appPricePoint", "appPricePoints"),
+          manualPrices: manualPriceRows(prices, "appPricePoint", "appPricePoints"),
+          ...manualPriceNote(prices),
         };
       }),
   );

@@ -16,7 +16,7 @@ import {
 // envelope. Aliased rather than imported bare so the two cannot be swapped by a
 // tidy-up.
 import { attributesOf as envelopeAttributes, idOf, pollAssetState, readImage } from "./assets.js";
-import { manualPriceRows } from "./pricing.js";
+import { MANUAL_PRICE_LIMIT, manualPriceNote, manualPriceRows } from "./pricing.js";
 import {
   PreconditionError,
   appIdArg,
@@ -190,31 +190,32 @@ export const registerIapTools = (
     },
     async ({ inAppPurchaseId }) =>
       wrap(async () => {
-        // The schedule resource carries nothing but relationships, so the prices
-        // only exist in `included` — summarizeResponse alone would return an id
-        // and no prices at all. The nested includes are what make each price
-        // legible; see manualPriceRows.
+        // Two calls, not one include: the schedule endpoint rejects a nested
+        // `manualPrices.inAppPurchasePricePoint` with an HTTP 400, and only the
+        // manualPrices endpoint can sideload the price point. See manualPriceRows.
         const response = await getOrNull(
           client,
           `/v2/inAppPurchases/${inAppPurchaseId}/iapPriceSchedule`,
-          {
-            include: "manualPrices.inAppPurchasePricePoint,manualPrices.territory,baseTerritory",
-          },
+          { include: "baseTerritory" },
         );
         if (response === null) {
           return { data: null, note: "This in-app purchase has never been priced." };
         }
         const schedule = resourceOf(response);
+        const prices = await client.get(
+          `/v1/inAppPurchasePriceSchedules/${schedule.id}/manualPrices`,
+          { include: "inAppPurchasePricePoint,territory", limit: MANUAL_PRICE_LIMIT },
+        );
 
         return {
           scheduleId: schedule.id,
           baseTerritory: relatedId(schedule, "baseTerritory"),
           manualPrices: manualPriceRows(
-            response,
-            "inAppPurchasePrices",
+            prices,
             "inAppPurchasePricePoint",
             "inAppPurchasePricePoints",
           ),
+          ...manualPriceNote(prices),
         };
       }),
   );
