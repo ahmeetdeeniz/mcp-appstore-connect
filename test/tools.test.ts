@@ -1,8 +1,11 @@
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { gzipSync } from "node:zlib";
 
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import { beforeAll, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { staticTokenProvider } from "../src/client/auth.js";
 import type { Config } from "../src/config.js";
@@ -929,33 +932,38 @@ describe("in-app purchase pricing", () => {
   });
 
   it("flattens the price schedule's sideloaded prices", async () => {
-    const fetchImpl = vi.fn(async () =>
-      jsonResponse({
-        data: {
-          id: "sched-1",
-          type: "inAppPurchasePriceSchedules",
-          relationships: { baseTerritory: { data: { id: "USA", type: "territories" } } },
-        },
-        included: [
-          {
-            id: "price-1",
-            type: "inAppPurchasePrices",
-            attributes: { startDate: "2026-09-01", endDate: null, manual: true },
-            relationships: {
-              territory: { data: { id: "USA", type: "territories" } },
-              inAppPurchasePricePoint: {
-                data: { id: PRICE_POINT_ID, type: "inAppPurchasePricePoints" },
+    const fetchImpl = vi.fn(async (url: string) =>
+      String(url).includes("/manualPrices")
+        ? jsonResponse({
+            data: [
+              {
+                id: "price-1",
+                type: "inAppPurchasePrices",
+                attributes: { startDate: "2026-09-01", endDate: null, manual: true },
+                relationships: {
+                  territory: { data: { id: "USA", type: "territories" } },
+                  inAppPurchasePricePoint: {
+                    data: { id: PRICE_POINT_ID, type: "inAppPurchasePricePoints" },
+                  },
+                },
               },
+            ],
+            included: [
+              {
+                id: PRICE_POINT_ID,
+                type: "inAppPurchasePricePoints",
+                attributes: { customerPrice: "4.99", proceeds: "3.49" },
+              },
+              { id: "USA", type: "territories", attributes: { currency: "USD" } },
+            ],
+          })
+        : jsonResponse({
+            data: {
+              id: "sched-1",
+              type: "inAppPurchasePriceSchedules",
+              relationships: { baseTerritory: { data: { id: "USA", type: "territories" } } },
             },
-          },
-          {
-            id: PRICE_POINT_ID,
-            type: "inAppPurchasePricePoints",
-            attributes: { customerPrice: "4.99", proceeds: "3.49" },
-          },
-          { id: "USA", type: "territories", attributes: { currency: "USD" } },
-        ],
-      }),
+          }),
     );
 
     const result = await callTool(
@@ -981,17 +989,24 @@ describe("in-app purchase pricing", () => {
       ],
     });
 
-    // Same defect as the app-side schedule: without the nested include Apple
-    // returns no price-point relationship at all, so this fixture only
-    // resembles a real response because the include asks for it.
-    const include = new URL(String(callArgs(fetchImpl)[0])).searchParams.get("include") ?? "";
-    expect(include).toContain("manualPrices.inAppPurchasePricePoint");
-    expect(include).toContain("manualPrices.territory");
+    // Same 400 as the app-side schedule: /v2/inAppPurchases/{id}/iapPriceSchedule
+    // takes only baseTerritory / manualPrices / automaticPrices, so the price
+    // point can only be sideloaded on the schedule's own manualPrices endpoint.
+    const includes = fetchImpl.mock.calls.map(
+      (call) => new URL(String(call[0])).searchParams.get("include") ?? "",
+    );
+    expect(includes.every((include) => !include.includes("."))).toBe(true);
+    expect(includes[1]).toBe("inAppPurchasePricePoint,territory");
+    expect(String(fetchImpl.mock.calls[1]?.[0])).toContain(
+      "/v1/inAppPurchasePriceSchedules/sched-1/manualPrices",
+    );
   });
 
   it("reports an unpriced IAP as an empty price list", async () => {
-    const fetchImpl = vi.fn(async () =>
-      jsonResponse({ data: { id: "sched-1", type: "inAppPurchasePriceSchedules" } }),
+    const fetchImpl = vi.fn(async (url: string) =>
+      String(url).includes("/manualPrices")
+        ? jsonResponse({ data: [] })
+        : jsonResponse({ data: { id: "sched-1", type: "inAppPurchasePriceSchedules" } }),
     );
 
     const result = await callTool(
@@ -1664,6 +1679,180 @@ describe("download_sales_report per-app filter", () => {
     expect(text).toContain("Apple Identifier");
     expect(text).toContain("Provider, Units");
   });
+
+  /**
+   * The trap this whole block of behaviour exists for. An in-app purchase row
+   * carries the IAP's own Apple Identifier and names its app only in `Parent
+   * Identifier`, as the SKU. Filtering on the app id therefore drops every one of
+   * them and returns a clean, plausible, `truncated: false` report showing no
+   * in-app revenue — an answer with nothing about it that looks wrong. Two real
+   * runs of the reporting skill came one probe away from publishing "this app has
+   * never earned anything" off exactly this.
+   */
+  describe("in-app purchase rows", () => {
+    const IAP_HEADER =
+      "Provider\tSKU\tTitle\tUnits\tApple Identifier\tProduct Type Identifier\tParent Identifier";
+    const IAP_TSV =
+      `${IAP_HEADER}\n` +
+      "APPLE\tD1EXPLORER\tD1 Explorer\t10\t6740111111\tF1\t\n" +
+      "APPLE\tOTHERAPP\tOther App\t5\t6740222222\tF1\t\n" +
+      "APPLE\tD1PRO\tD1 Explorer Pro\t3\t6762885916\tIA1-M\tD1EXPLORER\n" +
+      "APPLE\tD1EXPLORER\tD1 Explorer\t2\t6740111111\tF7\t\n";
+
+    it("keeps them by default, matching through Parent Identifier", async () => {
+      const body = JSON.parse(
+        textOf(await download({ appleIdentifier: "6740111111" }, IAP_TSV)),
+      ) as Record<string, unknown>;
+
+      expect(body.filter).toMatchObject({
+        matchedRows: 3,
+        inAppPurchaseRows: 1,
+        parentSkus: ["D1EXPLORER"],
+      });
+      // The purchase row is the one carrying the money, and it is the row an
+      // Apple Identifier filter silently discards.
+      expect(String(body.report)).toContain("D1PRO");
+      expect(String(body.report)).not.toContain("OTHERAPP");
+      // File order, not app rows followed by purchases.
+      expect(String(body.report).split("\n")[3]).toContain("F7");
+      expect(String(body.filter && (body.filter as Record<string, unknown>).note)).toContain(
+        "more than one",
+      );
+    });
+
+    it("says what opting out costs, rather than quietly returning less", async () => {
+      const body = JSON.parse(
+        textOf(
+          await download({ appleIdentifier: "6740111111", includeInAppPurchases: false }, IAP_TSV),
+        ),
+      ) as Record<string, unknown>;
+
+      expect(body.filter).toMatchObject({ matchedRows: 2, inAppPurchaseRows: 0 });
+      const note = String((body.filter as Record<string, unknown>).note);
+      expect(note).toContain("1 dropped rows carry Parent Identifier D1EXPLORER");
+      expect(note).toContain("in-app purchases");
+    });
+
+    /**
+     * The one case the report cannot answer for itself: with no rows of the app's
+     * own, there is nothing to read the SKU off, so the parent match has no key.
+     * Returning the app's two-row-shaped nothing without saying so is how a period
+     * where only IAPs sold reads as zero.
+     */
+    it("says so when the app's SKU cannot be derived from the file", async () => {
+      const onlyIap =
+        `${IAP_HEADER}\n` +
+        "APPLE\tOTHERAPP\tOther App\t5\t6740222222\tF1\t\n" +
+        "APPLE\tD1PRO\tD1 Explorer Pro\t3\t6762885916\tIA1-M\tD1EXPLORER\n";
+      const body = JSON.parse(
+        textOf(await download({ appleIdentifier: "6740111111" }, onlyIap)),
+      ) as Record<string, unknown>;
+
+      const note = String((body.filter as Record<string, unknown>).note);
+      expect(note).toContain("D1EXPLORER");
+      expect(note).toContain("Parent Identifier");
+
+      // Passing the SKU recovers the rows the id alone cannot reach.
+      const withSku = JSON.parse(textOf(await download({ sku: "D1EXPLORER" }, onlyIap))) as Record<
+        string,
+        unknown
+      >;
+      expect(withSku.filter).toMatchObject({ matchedRows: 1, inAppPurchaseRows: 1 });
+      expect(String(withSku.report)).toContain("D1PRO");
+    });
+
+    it("names the parent identifiers when nothing matched at all", async () => {
+      const body = JSON.parse(
+        textOf(await download({ appleIdentifier: "9999999999" }, IAP_TSV)),
+      ) as Record<string, unknown>;
+
+      const note = String((body.filter as Record<string, unknown>).note);
+      expect(note).toContain("the period itself is not empty");
+      expect(note).toContain("D1EXPLORER");
+    });
+
+    it("filters a report with no Parent Identifier column without complaint", async () => {
+      const body = JSON.parse(
+        textOf(await download({ appleIdentifier: "6740111111" }, SALES_TSV)),
+      ) as Record<string, unknown>;
+
+      expect(body.filter).toMatchObject({ matchedRows: 2, droppedRows: 1 });
+      // Nothing to report about a split this report shape cannot express.
+      expect((body.filter as Record<string, unknown>).inAppPurchaseRows).toBeUndefined();
+      expect((body.filter as Record<string, unknown>).note).toBeUndefined();
+    });
+  });
+
+  /**
+   * Without this the caller has to retype the report into a file, and a report is
+   * exactly the payload that survives a dropped row looking well-formed — the
+   * totals simply come out lower. Writing it here removes the step rather than
+   * defending against it.
+   */
+  describe("savePath", () => {
+    let dir = "";
+
+    beforeEach(async () => {
+      dir = await mkdtemp(join(tmpdir(), "asc-reports-"));
+    });
+    afterEach(async () => {
+      await rm(dir, { recursive: true, force: true });
+    });
+
+    it("writes the report and reports counts matching the preview", async () => {
+      const savePath = join(dir, "nested", "sales.tsv");
+      const body = JSON.parse(textOf(await download({ savePath }))) as Record<string, unknown>;
+
+      // Parent directories are created rather than being the caller's problem.
+      expect(await readFile(savePath, "utf8")).toBe(SALES_TSV);
+      expect(body.saved).toMatchObject({ path: savePath, dataRows: 3, lines: 4 });
+      expect((body.saved as Record<string, unknown>).dataRows).toBe(body.dataRows);
+    });
+
+    /**
+     * The distinction that keeps the pipeline honest: `report_stats.py` treats
+     * `truncated` as a hard error so a floor is never quoted as a total. Once a
+     * file has been written that flag describes the inlined copy only, and reading
+     * it as data loss would reject a file that lost nothing.
+     */
+    it("saves the whole report even when the inlined copy is truncated", async () => {
+      const savePath = join(dir, "sales.tsv");
+      const body = JSON.parse(textOf(await download({ savePath, maxLines: 2 }))) as Record<
+        string,
+        unknown
+      >;
+
+      expect(body.truncated).toBe(true);
+      expect(await readFile(savePath, "utf8")).toBe(SALES_TSV);
+      expect(body.saved).toMatchObject({ dataRows: 3 });
+      expect(String(body.savedNote)).toContain("all 3 data rows");
+    });
+
+    it("saves the filtered rows, not the whole portfolio", async () => {
+      const savePath = join(dir, "sales.tsv");
+      await download({ savePath, appleIdentifier: "6740111111" });
+
+      const written = await readFile(savePath, "utf8");
+      expect(written).not.toContain("OTHERAPP");
+      expect(written.split("\n")[0]).toBe(HEADER);
+    });
+
+    it("refuses a relative path rather than writing somewhere arbitrary", async () => {
+      const result = await download({ savePath: "reports/sales.tsv" });
+
+      expect(result.isError).toBe(true);
+      expect(textOf(result)).toContain("absolute path");
+    });
+
+    it("says what to do when the path is unwritable, naming the Docker case", async () => {
+      // A directory where a file is expected: the closest portable stand-in for
+      // the host path that does not exist inside a container.
+      const result = await download({ savePath: dir });
+
+      expect(result.isError).toBe(true);
+      expect(textOf(result)).toContain("Docker");
+    });
+  });
 });
 
 const analyticsRequest = (id: string, accessType: string): unknown => ({
@@ -1868,6 +2057,47 @@ describe("get_analytics_status", () => {
     expect(body.reports).toBe(2);
     expect(body.reportsProbed).toBe(1);
     expect(String(body.truncationNote)).toContain("floor, not a total");
+  });
+
+  /**
+   * A floor of zero answers nothing, and "is there any data yet" is the question
+   * this tool exists for. Apple registers ~106 reports against a default cap of
+   * 20, so a bounded walk reports zero on an app whose data sits at report 25 —
+   * indistinguishable from an app that genuinely has none. Probing therefore
+   * continues while the count is still zero; once anything is found the cap
+   * applies again, because the floor caveat is harmless when data exists.
+   */
+  it("keeps probing while the answer is still zero, so a zero is never a floor", async () => {
+    const many = Array.from({ length: 30 }, (_v, i) => analyticsReport(`rep-${i}`, "APP_USAGE"));
+
+    const found = await status(
+      walk({
+        requests: [analyticsRequest("req-1", "ONE_TIME_SNAPSHOT")],
+        reports: many,
+        instances: { "rep-12": [analyticsInstance("ins-1", "2026-08-13")] },
+      }),
+      { maxReportsProbed: 5 },
+    );
+    expect(found.instances).toBe(1);
+    expect(found.earliestInstanceDate).toBe("2026-08-13");
+    // Report 12 lands in the third batch of five, and the walk stops there rather
+    // than continuing through all 30 — the cap still bounds a non-zero answer.
+    expect(found.reportsProbed).toBe(15);
+    expect(String(found.truncationNote)).toContain("floor, not a total");
+
+    const empty = await status(
+      walk({
+        requests: [analyticsRequest("req-1", "ONE_TIME_SNAPSHOT")],
+        reports: many,
+        instances: {},
+      }),
+      { maxReportsProbed: 5 },
+    );
+    expect(empty.instances).toBe(0);
+    expect(empty.reportsProbed).toBe(30);
+    // Nothing may qualify a zero as partial, because it is not.
+    expect(empty.truncationNote).toBeUndefined();
+    expect(String(empty.note)).toContain("every one was checked");
   });
 
   it("passes a category filter through to Apple rather than filtering locally", async () => {
@@ -2641,52 +2871,65 @@ describe("submission prerequisites", () => {
     });
 
     /**
-     * The amount lives on the price point, not on the price, so asking for
-     * `manualPrices` alone returns rows with no relationships at all — and
-     * because `JSON.stringify` drops undefined, `pricePointId` and `territory`
-     * come back invisible rather than absent. The tool then answers "what does
-     * this app cost" with an opaque base64 id, leaving the caller to decode it
-     * or page hundreds of price points to discover the app is free.
+     * The regression guard for the 400 this tool shipped with. The amount lives on
+     * the price point, not on the price, so the prices are unreadable without a
+     * sideload — but `/v1/apps/{id}/appPriceSchedule` takes exactly `app`,
+     * `baseTerritory`, `manualPrices` and `automaticPrices` as `include` values.
+     * A nested `manualPrices.appPricePoint` is not a deeper answer, it is
+     * `'manualPrices.appPricePoint' is not a valid relationship name` and no
+     * schedule at all. Any dot in an `include` this server sends is that bug.
      */
-    it("asks for the nested includes the prices are unreadable without", async () => {
-      const fetchImpl = vi.fn(async () =>
-        jsonResponse({ data: { id: "sched-1", type: "appPriceSchedules" } }),
+    it("never sends a nested include, and reads the prices from their own endpoint", async () => {
+      const fetchImpl = vi.fn(async (url: string) =>
+        String(url).includes("/manualPrices")
+          ? jsonResponse({ data: [] })
+          : jsonResponse({ data: { id: "sched-1", type: "appPriceSchedules" } }),
       );
 
       await callTool("app_store_connect_get_app_price_schedule", { appId: APP_ID }, fetchImpl);
 
-      const include = new URL(String(callArgs(fetchImpl)[0])).searchParams.get("include") ?? "";
-      expect(include).toContain("manualPrices.appPricePoint");
-      expect(include).toContain("manualPrices.territory");
-      expect(include).toContain("baseTerritory");
+      const includes = fetchImpl.mock.calls.map(
+        (call) => new URL(String(call[0])).searchParams.get("include") ?? "",
+      );
+      expect(includes.every((include) => !include.includes("."))).toBe(true);
+      expect(includes[0]).toBe("baseTerritory");
+      expect(includes[1]).toBe("appPricePoint,territory");
+      expect(String(fetchImpl.mock.calls[1]?.[0])).toContain(
+        "/v1/appPriceSchedules/sched-1/manualPrices",
+      );
     });
 
     it("inlines the price behind each price point so the cost is in the answer", async () => {
-      const fetchImpl = vi.fn(async () =>
-        jsonResponse({
-          data: {
-            id: "sched-1",
-            type: "appPriceSchedules",
-            relationships: { baseTerritory: { data: { id: "USA", type: "territories" } } },
-          },
-          included: [
-            {
-              id: "price-1",
-              type: "appPrices",
-              attributes: { startDate: null, endDate: null, manual: true },
-              relationships: {
-                territory: { data: { id: "USA", type: "territories" } },
-                appPricePoint: { data: { id: "free-point", type: "appPricePoints" } },
+      const fetchImpl = vi.fn(async (url: string) =>
+        String(url).includes("/manualPrices")
+          ? jsonResponse({
+              data: [
+                {
+                  id: "price-1",
+                  type: "appPrices",
+                  attributes: { startDate: null, endDate: null, manual: true },
+                  relationships: {
+                    territory: { data: { id: "USA", type: "territories" } },
+                    appPricePoint: { data: { id: "free-point", type: "appPricePoints" } },
+                  },
+                },
+              ],
+              included: [
+                {
+                  id: "free-point",
+                  type: "appPricePoints",
+                  attributes: { customerPrice: "0.00", proceeds: "0.00" },
+                },
+                { id: "USA", type: "territories", attributes: { currency: "USD" } },
+              ],
+            })
+          : jsonResponse({
+              data: {
+                id: "sched-1",
+                type: "appPriceSchedules",
+                relationships: { baseTerritory: { data: { id: "USA", type: "territories" } } },
               },
-            },
-            {
-              id: "free-point",
-              type: "appPricePoints",
-              attributes: { customerPrice: "0.00", proceeds: "0.00" },
-            },
-            { id: "USA", type: "territories", attributes: { currency: "USD" } },
-          ],
-        }),
+            }),
       );
 
       const result = await callTool(

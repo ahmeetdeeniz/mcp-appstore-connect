@@ -247,7 +247,7 @@ A **free** app still needs a price: "free" is a price point, not the absence of 
 
 **TestFlight** — `list_beta_groups`, `list_beta_testers`, `list_beta_feedback`, _`create_beta_group`_\*, _`invite_beta_tester`_\*, _`add_tester_to_group`_\*, _`remove_tester_from_group`_\*† — an app with no group has nowhere to send a build, so `create_beta_group` is the first step of setting TestFlight up; every other tool here needs the group id it returns. Internal groups take testers who are already Users on the account and skip Beta App Review, so `hasAccessToAllBuilds` is the quickest way to make builds you have already uploaded installable.
 
-**Sales & finance reports** — `get_vendor_number`, `download_sales_report`, `download_finance_report` — the Sales and Trends TSVs: units, proceeds, installs by territory and install type. Needs a vendor number; `get_vendor_number` reports the configured one, which layer it came from, and whether Apple accepts it. The sales report is account-wide and Apple offers no per-app filter, so pass `appleIdentifier` or `sku` to have the server apply one after download — it runs before `maxLines`, so truncation counts the app you asked about rather than an arbitrary slice of the portfolio, and the dropped row count comes back with it. **`download_finance_report` takes a _fiscal_ period, not a calendar one:** Apple's fiscal year opens in late September and its months are 4-4-5 weeks, so `2026-07` is fiscal month 7 of FY2026 — roughly late March to early May. Getting this wrong is silent, because a well-formed report comes back either way, so the response carries a `coverage` block with the start and end dates the report actually covers. Check it before quoting any figure.
+**Sales & finance reports** — `get_vendor_number`, `download_sales_report`, `download_finance_report` — the Sales and Trends TSVs: units, proceeds, installs by territory and install type. Needs a vendor number; `get_vendor_number` reports the configured one, which layer it came from, and whether Apple accepts it. The sales report is account-wide and Apple offers no per-app filter, so pass `appleIdentifier` or `sku` to have the server apply one after download — it runs before `maxLines`, so truncation counts the app you asked about rather than an arbitrary slice of the portfolio, and the dropped row count comes back with it. **An in-app purchase row does not carry its app's Apple Identifier** — it carries the IAP's own, and names the app only in `Parent Identifier`, as the SKU. Filtering on the app id alone therefore returns a clean, plausible report showing no in-app revenue at all, so the server matches those rows through `Parent Identifier` too and says how many it found; `includeInAppPurchases: false` opts out and reports what that cost. **`download_finance_report` takes a _fiscal_ period, not a calendar one:** Apple's fiscal year opens in late September and its months are 4-4-5 weeks, so `2026-07` is fiscal month 7 of FY2026 — roughly late March to early May. Getting this wrong is silent, because a well-formed report comes back either way, so the response carries a `coverage` block with the start and end dates the report actually covers. Check it before quoting any figure.
 
 **Analytics** — `get_analytics_status`, `list_analytics_report_requests`, `list_analytics_reports`, `list_analytics_report_instances`, `list_analytics_report_segments`, `download_analytics_report_segment`, _`create_analytics_report_request`_\* — App Analytics proper: impressions, product page views, conversion rate, installs, deletions, sessions, retention. `get_analytics_status` walks the whole chain in one call and answers "is there any data yet, and how far back does it go" — reach for it before the four-step walk, especially just after enabling analytics, since reports exist as soon as Apple registers them but hold nothing until instances appear a day or two later. See [Reading analytics](#reading-analytics).
 
@@ -295,9 +295,13 @@ fastlane path is the default only because it's the one other tools already read.
 `apply_listing` needs no such setting: it finds the tree from wherever you pass
 `.listing.json`, so a tree you move later keeps working.
 
-The server never writes to disk: `export_listing` hands back `{path, content}` pairs and
-your agent writes them, so every write stays under your own permission prompt and nothing
-depends on host paths being visible inside Docker.
+The server writes to disk only where you point it. `export_listing` hands back
+`{path, content}` pairs and your agent writes them, so listing writes stay under your own
+permission prompt. The three report downloads take an optional `savePath`, because the
+alternative — retyping a TSV out of a tool result — loses rows silently, and a report
+missing a row still totals to a plausible number. A saved file always holds the report in
+full; `maxLines` then only trims the copy inlined in the response. Under Docker the path
+must resolve inside the container, so mount the folder and pass the container path.
 
 Editing and pushing back:
 

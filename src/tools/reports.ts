@@ -1,3 +1,6 @@
+import { mkdir, writeFile } from "node:fs/promises";
+import { dirname, isAbsolute } from "node:path";
+
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 
@@ -76,6 +79,92 @@ export const previewReport = (tsv: string, maxLines: number): Record<string, unk
   };
 };
 
+/** The argument every report-download tool takes, described once. */
+const savePathArg = z
+  .string()
+  .optional()
+  .describe(
+    "Absolute path to write the report to. The file gets the report in FULL — maxLines then " +
+      "only trims the copy inlined in this response — so a saved file is never truncated and " +
+      "needs no transcription. Parent directories are created. Use this rather than retyping " +
+      "the report into a file, which is where rows go missing.",
+  );
+
+/**
+ * Write a report where the caller asked, and report what landed.
+ *
+ * The alternative is the caller retyping the report out of a tool result, and a
+ * report is exactly the kind of payload that survives a dropped row looking
+ * perfectly well-formed — the totals just come out lower. Writing it here removes
+ * the transcription step rather than defending against it.
+ *
+ * Counts come back with the path so the write can be checked against the same
+ * `dataRows` the preview reports, and the two cannot disagree.
+ */
+const saveReport = async (
+  path: string,
+  text: string,
+): Promise<{ path: string; bytes: number; lines: number; dataRows: number }> => {
+  if (!isAbsolute(path)) {
+    throw new PreconditionError(
+      `\`savePath\` must be an absolute path (got "${path}") — this server's working directory ` +
+        `is not necessarily yours.`,
+      { savePath: path },
+    );
+  }
+  try {
+    await mkdir(dirname(path), { recursive: true });
+    await writeFile(path, text, "utf8");
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    throw new PreconditionError(
+      `Could not write the report to ${path} (${code ?? "unknown error"}). If this MCP server ` +
+        `runs in Docker the path must be INSIDE the container — mount the folder ` +
+        `(docker run -v /host/reports:/reports …) and pass the container path. Omitting ` +
+        `savePath returns the report inline instead.`,
+      { savePath: path, code },
+    );
+  }
+  const lines = text
+    .split("\n")
+    .filter((line, index, all) => line !== "" || index < all.length - 1).length;
+  return {
+    path,
+    bytes: Buffer.byteLength(text, "utf8"),
+    lines,
+    dataRows: Math.max(0, lines - 1),
+  };
+};
+
+/**
+ * Combine the inline preview with the saved-file record.
+ *
+ * `truncated` describes the preview only once a file has been written, and the
+ * distinction matters downstream: `report_stats.py` treats truncation as a hard
+ * error so that a floor is never quoted as a total. Reading the saved file's
+ * completeness as a loss would make it refuse a file that lost nothing.
+ */
+const previewAndSave = async (
+  text: string,
+  maxLines: number,
+  savePath: string | undefined,
+): Promise<Record<string, unknown>> => {
+  const preview = previewReport(text, maxLines);
+  if (savePath === undefined) return preview;
+  const saved = await saveReport(savePath, text);
+  return {
+    ...preview,
+    saved,
+    ...(preview.truncated === true
+      ? {
+          savedNote:
+            `The file at ${saved.path} holds all ${saved.dataRows} data rows. \`truncated\` ` +
+            `above describes the inlined copy only — read the file for totals.`,
+        }
+      : {}),
+  };
+};
+
 /**
  * Split a report into its header line and data lines, discarding the trailing
  * blank Apple leaves behind. Shares `previewReport`'s rule about that newline so
@@ -145,7 +234,13 @@ const SALES_FILTER_COLUMNS = {
   sku: "SKU",
 } as const;
 
-type SalesFilter = { appleIdentifier?: string; sku?: string };
+/**
+ * The column an in-app purchase row names its parent app in — by SKU, not by the
+ * numeric Apple Identifier the rest of the filtering uses. See filterSalesReport.
+ */
+const PARENT_COLUMN = "Parent Identifier";
+
+type SalesFilter = { appleIdentifier?: string; sku?: string; includeInAppPurchases?: boolean };
 
 /**
  * Keep only the rows belonging to one app, before anything is truncated.
@@ -161,6 +256,21 @@ type SalesFilter = { appleIdentifier?: string; sku?: string };
  * Filtering here fixes both: the limit applies to the rows that were asked for,
  * so `truncated` means what it says, and the dropped count is reported rather
  * than left to be inferred.
+ *
+ * The third thing that goes wrong is the reason `includeInAppPurchases` exists.
+ * An in-app purchase row does *not* carry its app's Apple Identifier — it carries
+ * the IAP's own, and names the app only in `Parent Identifier`, as the app's SKU
+ * string rather than its numeric id. So filtering an account-wide report to an app
+ * id drops every IA1 / IA1-M row and returns a clean, plausible, `truncated: false`
+ * report showing no in-app revenue at all. Nothing about that answer looks wrong;
+ * two separate real runs of the reporting skill came one probe away from publishing
+ * "this app has never earned anything" off the back of it.
+ *
+ * The app's SKU does not have to be supplied to fix this: it is already on the
+ * app's own rows, so a first pass over the direct matches yields the parent keys a
+ * second pass needs. The one case that cannot self-heal is an app with no direct
+ * rows in the period, where there is nothing to read the SKU off — that one is
+ * reported rather than silently returning fewer rows than exist.
  */
 const filterSalesReport = (
   tsv: string,
@@ -169,13 +279,29 @@ const filterSalesReport = (
   tsv: string;
   matchedRows: number;
   droppedRows: number;
+  inAppPurchaseRows: number;
+  parentSkus: string[];
+  hasParentColumn: boolean;
+  droppedChildRows: number;
+  droppedChildParents: string[];
   availableColumn: string;
   available: string[];
+  availableParents: string[];
 } => {
+  const empty = {
+    matchedRows: 0,
+    droppedRows: 0,
+    inAppPurchaseRows: 0,
+    parentSkus: [],
+    hasParentColumn: false,
+    droppedChildRows: 0,
+    droppedChildParents: [],
+    availableColumn: "",
+    available: [],
+    availableParents: [],
+  };
   const split = splitReport(tsv);
-  if (split === undefined) {
-    return { tsv, matchedRows: 0, droppedRows: 0, availableColumn: "", available: [] };
-  }
+  if (split === undefined) return { tsv, ...empty };
   const { header, rows } = split;
   const columns = columnIndexes(header);
 
@@ -196,27 +322,139 @@ const filterSalesReport = (
     );
   }
 
-  const matched = rows.filter((row) =>
-    wanted.every((entry) => cellAt(row, columns.get(entry.column) as number) === entry.value),
-  );
+  const direct = new Set<number>();
+  rows.forEach((row, index) => {
+    if (wanted.every((entry) => cellAt(row, columns.get(entry.column) as number) === entry.value)) {
+      direct.add(index);
+    }
+  });
+
+  // The parent keys are SKUs. An explicit `sku` filter is one directly; otherwise
+  // they come off the app's own rows, which carry both identifiers side by side.
+  const skuIndex = columns.get(SALES_FILTER_COLUMNS.sku);
+  const parentIndex = columns.get(PARENT_COLUMN);
+  const parentSkus = new Set<string>();
+  if (filter.sku !== undefined && filter.sku !== "") parentSkus.add(filter.sku);
+  if (skuIndex !== undefined) {
+    for (const index of direct) {
+      const value = cellAt(rows[index] as string, skuIndex);
+      if (value !== "") parentSkus.add(value);
+    }
+  }
+
+  // Children are found whether or not they are wanted: a caller who opts out still
+  // needs to be told what opting out cost them, and that count is the whole point
+  // of the note. Only the membership of `keep` depends on the flag.
+  const children = new Set<number>();
+  if (parentIndex !== undefined && parentSkus.size > 0) {
+    rows.forEach((row, index) => {
+      if (direct.has(index)) return;
+      if (parentSkus.has(cellAt(row, parentIndex))) children.add(index);
+    });
+  }
+
+  const includeChildren = filter.includeInAppPurchases !== false;
+  const keep = includeChildren ? new Set([...direct, ...children]) : direct;
+  // One pass over the original rows, so the output keeps the file's order rather
+  // than listing the app's rows and then its purchases.
+  const matched = rows.filter((_row, index) => keep.has(index));
+
+  const distinct = (index: number | undefined, from: Set<number> | undefined): string[] =>
+    index === undefined
+      ? []
+      : [
+          ...new Set(
+            (from === undefined ? rows : rows.filter((_row, i) => from.has(i))).map((row) =>
+              cellAt(row, index),
+            ),
+          ),
+        ]
+          .filter((value) => value !== "")
+          .slice(0, 25);
 
   // Only computed for the empty result, where naming the values actually present
-  // is what distinguishes a typo from a report for the wrong account.
+  // is what distinguishes a typo from a report for the wrong account — and, since
+  // the IAP split, from an app whose rows are all keyed under a parent.
   const probe = wanted[0];
-  const available =
-    matched.length === 0 && probe !== undefined
-      ? [...new Set(rows.map((row) => cellAt(row, columns.get(probe.column) as number)))]
-          .filter((value) => value !== "")
-          .slice(0, 25)
-      : [];
+  const nothingMatched = matched.length === 0;
 
   return {
     tsv: [header, ...matched].join("\n") + "\n",
     matchedRows: matched.length,
     droppedRows: rows.length - matched.length,
+    inAppPurchaseRows: includeChildren ? children.size : 0,
+    parentSkus: [...parentSkus],
+    hasParentColumn: parentIndex !== undefined,
+    droppedChildRows: includeChildren ? 0 : children.size,
+    droppedChildParents: includeChildren ? [] : distinct(parentIndex, children),
     availableColumn: probe?.column ?? "",
-    available,
+    available:
+      nothingMatched && probe !== undefined ? distinct(columns.get(probe.column), undefined) : [],
+    availableParents: nothingMatched ? distinct(parentIndex, undefined) : [],
   };
+};
+
+/**
+ * Say what the filter did in the two cases where the rows alone mislead.
+ *
+ * An empty result is the older of the two: it reads as "this app earned nothing"
+ * when it usually means the id belongs to another account. Naming the values the
+ * report does hold — including the parent identifiers, since the IAP split — turns
+ * that into a fact the caller can act on.
+ *
+ * The newer case is a non-empty result that is quietly incomplete: children found
+ * but excluded, or an app whose SKU could not be derived because it has no rows of
+ * its own this period. Both return a well-formed report that is missing revenue,
+ * which is the failure this whole mechanism exists to prevent, so neither is
+ * allowed to pass silently.
+ */
+const salesFilterNote = (
+  filtered: ReturnType<typeof filterSalesReport>,
+  sku: string | undefined,
+): string | undefined => {
+  if (filtered.matchedRows === 0) {
+    const parents = filtered.availableParents.length
+      ? ` "${PARENT_COLUMN}" values present: ${filtered.availableParents.join(", ")} — an ` +
+        `in-app purchase names its app there, by SKU, so a match in that list means the right ` +
+        `app filtered by the wrong column.`
+      : "";
+    return (
+      `No rows matched. The report holds ${filtered.droppedRows} rows for other ` +
+      `apps, so the period itself is not empty — this is a filter that did not ` +
+      `match, most often a correct-looking id from a different account. ` +
+      `"${filtered.availableColumn}" values present: ` +
+      `${filtered.available.join(", ") || "none"}.${parents}`
+    );
+  }
+
+  if (filtered.droppedChildRows > 0) {
+    return (
+      `${filtered.droppedChildRows} dropped rows carry ${PARENT_COLUMN} ` +
+      `${filtered.droppedChildParents.join(", ")} — these are this app's in-app purchases, ` +
+      `excluded because includeInAppPurchases is false. Any revenue on them is missing from ` +
+      `the totals below.`
+    );
+  }
+
+  if (filtered.hasParentColumn && filtered.parentSkus.length === 0 && sku === undefined) {
+    return (
+      `This app has no rows of its own in this period, so its SKU could not be read off the ` +
+      `report and no in-app purchase rows could be matched — ${PARENT_COLUMN} holds the SKU, ` +
+      `not the app id. Pass sku to pick them up; without it, a period where only IAPs sold ` +
+      `reads as zero.`
+    );
+  }
+
+  if (filtered.inAppPurchaseRows > 0) {
+    return (
+      `${filtered.inAppPurchaseRows} of the ${filtered.matchedRows} rows are in-app purchases, ` +
+      `matched through ${PARENT_COLUMN} = ${filtered.parentSkus.join(", ")}. They carry their ` +
+      `own Apple Identifier and SKU, so these rows hold more than one of each — group by ` +
+      `Product Type Identifier to separate app units from purchases.`
+    );
+  }
+
+  return undefined;
 };
 
 /**
@@ -471,9 +709,12 @@ export const registerReportTools = (
         "YEARLY YYYY. Requires a vendor number. The report is account-wide — it holds every app " +
         "the vendor ships, keyed by SKU / Title / Apple Identifier. Apple offers no per-app " +
         "filter, so pass appleIdentifier or sku to have this tool apply one after download — " +
-        "otherwise every total spans the whole portfolio. Units mix first-time downloads with " +
-        "free updates (see Product Type Identifier), and Developer Proceeds / Customer Price are " +
-        "per unit, not per row. A period with no rows comes back as a 404.",
+        "otherwise every total spans the whole portfolio. In-app purchase rows carry the IAP's " +
+        "own Apple Identifier and name the app only in Parent Identifier, as its SKU, so they " +
+        "are kept via that column (see includeInAppPurchases) and the filtered rows can hold " +
+        "more than one Apple Identifier. Units mix first-time downloads with free updates (see " +
+        "Product Type Identifier), and Developer Proceeds / Customer Price are per unit, not " +
+        "per row. A period with no rows comes back as a 404.",
       inputSchema: {
         reportDate: z
           .string()
@@ -493,19 +734,39 @@ export const registerReportTools = (
           .optional()
           .describe(
             'Keep only rows whose "Apple Identifier" matches this app id, dropping the rest of ' +
-              "the portfolio. Applied before maxLines, so truncation counts this app's rows only.",
+              "the portfolio. Applied before maxLines, so truncation counts this app's rows " +
+              "only. This id matches the app's own rows; its in-app purchases are kept through " +
+              "Parent Identifier instead — see includeInAppPurchases.",
           ),
         sku: z
           .string()
           .optional()
-          .describe('Keep only rows whose "SKU" matches. Combines with appleIdentifier.'),
+          .describe(
+            'Keep only rows whose "SKU" matches. Combines with appleIdentifier. Also seeds the ' +
+              "in-app purchase match, which is worth passing for a period where the app itself " +
+              "sold nothing, since the SKU cannot then be read off its own rows.",
+          ),
+        includeInAppPurchases: z
+          .boolean()
+          .default(true)
+          .describe(
+            'Also keep rows whose "Parent Identifier" is this app\'s SKU — its in-app ' +
+              "purchases, which carry the IAP's Apple Identifier rather than the app's and are " +
+              "therefore invisible to an appleIdentifier filter. Defaults to true: leaving them " +
+              "out reports an app with paid IAPs as earning nothing, and the result looks " +
+              "entirely well-formed. Set false only to count the app's own units in isolation.",
+          ),
         maxLines: z
           .number()
           .int()
           .min(1)
           .max(5000)
           .default(500)
-          .describe("Truncate the TSV to this many lines. Defaults to 500."),
+          .describe(
+            "Truncate the inlined TSV to this many lines. Defaults to 500. Does not affect the " +
+              "file written by savePath.",
+          ),
+        savePath: savePathArg,
       },
       annotations: { readOnlyHint: true },
     },
@@ -517,7 +778,9 @@ export const registerReportTools = (
       vendorNumber,
       appleIdentifier,
       sku,
+      includeInAppPurchases,
       maxLines,
+      savePath,
     }) =>
       wrap(async () => {
         const vendor = requireVendor(vendorNumber, ctx.vendorNumber);
@@ -533,26 +796,24 @@ export const registerReportTools = (
           ),
         );
 
-        if (appleIdentifier === undefined && sku === undefined) return previewReport(tsv, maxLines);
+        if (appleIdentifier === undefined && sku === undefined) {
+          return previewAndSave(tsv, maxLines, savePath);
+        }
 
-        const filtered = filterSalesReport(tsv, { appleIdentifier, sku });
+        const filtered = filterSalesReport(tsv, { appleIdentifier, sku, includeInAppPurchases });
         return {
           filter: {
             ...compact({ appleIdentifier, sku }),
+            includeInAppPurchases,
             matchedRows: filtered.matchedRows,
             droppedRows: filtered.droppedRows,
-            ...(filtered.matchedRows === 0
-              ? {
-                  note:
-                    `No rows matched. The report holds ${filtered.droppedRows} rows for other ` +
-                    `apps, so the period itself is not empty — this is a filter that did not ` +
-                    `match, most often a correct-looking id from a different account. ` +
-                    `"${filtered.availableColumn}" values present: ` +
-                    `${filtered.available.join(", ") || "none"}.`,
-                }
+            ...(filtered.hasParentColumn
+              ? { inAppPurchaseRows: filtered.inAppPurchaseRows, parentSkus: filtered.parentSkus }
               : {}),
+            ...compact({ note: salesFilterNote(filtered, sku) }),
           },
-          ...previewReport(filtered.tsv, maxLines),
+          // The saved file is the filtered report, so it is already app-scoped.
+          ...(await previewAndSave(filtered.tsv, maxLines, savePath)),
         };
       }),
   );
@@ -593,11 +854,15 @@ export const registerReportTools = (
           .min(1)
           .max(5000)
           .default(500)
-          .describe("Truncate the TSV to this many lines. Defaults to 500."),
+          .describe(
+            "Truncate the inlined TSV to this many lines. Defaults to 500. Does not affect the " +
+              "file written by savePath.",
+          ),
+        savePath: savePathArg,
       },
       annotations: { readOnlyHint: true },
     },
-    async ({ reportDate, regionCode, vendorNumber, maxLines }) =>
+    async ({ reportDate, regionCode, vendorNumber, maxLines, savePath }) =>
       wrap(async () => {
         const vendor = requireVendor(vendorNumber, ctx.vendorNumber);
         const tsv = await withVendorHint(vendor, () =>
@@ -628,7 +893,7 @@ export const registerReportTools = (
                   "it covers could not be confirmed from the data. Verify the dates before " +
                   "quoting figures — reportDate is fiscal, not calendar.",
               }),
-          ...previewReport(tsv, maxLines),
+          ...(await previewAndSave(tsv, maxLines, savePath)),
         };
       }),
   );
@@ -807,7 +1072,10 @@ export const registerReportTools = (
           .min(1)
           .max(5000)
           .default(500)
-          .describe("Truncate the returned rows to this many lines. Defaults to 500."),
+          .describe(
+            "Truncate the inlined rows to this many lines. Defaults to 500. Does not affect the " +
+              "file written by savePath.",
+          ),
         maxBytes: z
           .number()
           .int()
@@ -817,10 +1085,11 @@ export const registerReportTools = (
             "Refuse a segment whose compressed size exceeds this, before downloading it. " +
               "Defaults to 25 MiB.",
           ),
+        savePath: savePathArg,
       },
       annotations: { readOnlyHint: true },
     },
-    async ({ instanceId, segmentIndex, maxLines, maxBytes }) =>
+    async ({ instanceId, segmentIndex, maxLines, maxBytes, savePath }) =>
       wrap(async () => {
         const response = await client.get(`/v1/analyticsReportInstances/${instanceId}/segments`);
         const segments = resourcesOf(response);
@@ -865,7 +1134,7 @@ export const registerReportTools = (
             ...(typeof attributes.checksum === "string" ? { checksum: attributes.checksum } : {}),
             sizeInBytes,
           },
-          ...previewReport(csv, maxLines),
+          ...(await previewAndSave(csv, maxLines, savePath)),
         };
       }),
   );
@@ -904,8 +1173,10 @@ export const registerReportTools = (
           .max(100)
           .default(20)
           .describe(
-            "How many reports to check for instances. Reports beyond this are counted but not " +
-              "probed, and the response says so. Defaults to 20.",
+            "How many reports to check for instances before answering. Defaults to 20. The cap " +
+              "is ignored while the count is still zero — probing continues until an instance " +
+              "is found or every report has been checked — so a zero is never a floor, which " +
+              'is what makes this tool answerable for "is there any data yet".',
           ),
       },
       annotations: { readOnlyHint: true },
@@ -954,12 +1225,29 @@ export const registerReportTools = (
             ? allReports.filter((report) => attributesOf(report).category !== "FRAMEWORK_USAGE")
             : allReports;
 
-        const probed = reports.slice(0, maxReportsProbed);
-        const instancePages = await Promise.all(
-          probed.map((report) =>
-            client.getAll<Rec>(`/v1/analyticsReports/${report.id}/instances`, { limit: 200 }),
-          ),
-        );
+        /**
+         * Probe in batches, and keep going while the answer is still zero.
+         *
+         * A bounded walk makes every count a floor, and a floor of zero answers
+         * nothing — which is a problem, because "is there any data yet" is the
+         * question this tool exists for, and Apple registers ~106 reports against
+         * a default of 20. Once a single instance has been found the cap is
+         * harmless: the caller knows data exists and the floor caveat covers the
+         * rest. Until then it is the whole answer, so it is worth the extra calls.
+         */
+        const probed: Rec[] = [];
+        const instancePages: { data: Rec[] }[] = [];
+        while (probed.length < reports.length) {
+          const batch = reports.slice(probed.length, probed.length + maxReportsProbed);
+          const pages = await Promise.all(
+            batch.map((report) =>
+              client.getAll<Rec>(`/v1/analyticsReports/${report.id}/instances`, { limit: 200 }),
+            ),
+          );
+          probed.push(...batch);
+          instancePages.push(...pages);
+          if (instancePages.some((page) => page.data.length > 0)) break;
+        }
 
         const byCategory: Record<string, { reports: number; instances: number }> = {};
         for (const report of reports) {
@@ -993,18 +1281,22 @@ export const registerReportTools = (
           reportsProbed: probed.length,
           ...(excluded > 0 ? { frameworkUsageReportsExcluded: excluded } : {}),
           ...compact({
-            // Never let a bounded walk read as a complete one.
+            // Never let a bounded walk read as a complete one. A zero never gets
+            // here — probing does not stop while the count is still zero — so this
+            // only ever qualifies a count that is already known to be non-zero.
             truncationNote:
-              unprobed > 0
+              unprobed > 0 && instances > 0
                 ? `${unprobed} of ${reports.length} reports were not probed for instances, so ` +
                   `the instance count is a floor, not a total. Raise maxReportsProbed or pass ` +
-                  `a category to narrow it.`
+                  `a category to narrow it. Data definitely exists either way.`
                 : undefined,
             note:
               instances === 0
-                ? "Reports exist but hold no instances yet, so there is no data to read. Apple " +
-                  "generates instances a day or two after a request is created — this is " +
-                  "normal immediately after enabling analytics, and is not an error."
+                ? `None of the ${reports.length} reports hold any instance yet, so there is no ` +
+                  `data to read — every one was checked, so this is a real zero and not a ` +
+                  `partial walk. Apple generates instances a day or two after a request is ` +
+                  `created; this is normal immediately after enabling analytics, and is not an ` +
+                  `error.`
                 : undefined,
             // The failure mode #6 warns about, detectable here for free.
             historyWarning: !accessTypes.includes("ONE_TIME_SNAPSHOT")
