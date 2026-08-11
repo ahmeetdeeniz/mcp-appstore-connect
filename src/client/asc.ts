@@ -102,11 +102,20 @@ const withRetry = async (
 
 /**
  * Analytics report segments are served from a blob store rather than the API
- * host, so `relativize()`'s same-origin rule cannot gate them — but the URL
- * still arrives off the wire, so pin it to Apple before fetching rather than
- * following wherever a response happens to point.
+ * host, so `relativize()`'s same-origin rule cannot gate them.
+ *
+ * The URL arrives inside an authenticated response we just made, so that — not
+ * the hostname — is the real guard; this list is defence in depth against
+ * following a redirected or tampered url. It has to name every host Apple
+ * actually serves from, and `apple.com` alone was not enough: segments come from
+ * Apple's `asp-<region>` S3 buckets, so pinning to apple.com refused every
+ * analytics download there was.
  */
-const APPLE_DOWNLOAD_HOST = /(^|\.)apple\.com$/;
+const DOWNLOAD_HOSTS = [
+  /(^|\.)apple\.com$/,
+  // e.g. asp-us-west-2.s3.amazonaws.com, and the s3-<region> spelling.
+  /^asp-[a-z0-9-]+\.s3[.-][a-z0-9.-]*amazonaws\.com$/,
+];
 
 const isGzip = (buf: Buffer): boolean => buf.length > 2 && buf[0] === 0x1f && buf[1] === 0x8b;
 
@@ -301,10 +310,15 @@ export class AppStoreConnectClient {
     } catch {
       throw new Error(`Not a valid download URL: ${url}`);
     }
-    if (parsed.protocol !== "https:" || !APPLE_DOWNLOAD_HOST.test(parsed.hostname)) {
+    if (
+      parsed.protocol !== "https:" ||
+      !DOWNLOAD_HOSTS.some((pattern) => pattern.test(parsed.hostname))
+    ) {
       throw new Error(
         `Refusing to download from ${parsed.host} — signed report URLs must be https on an ` +
-          `apple.com host. Re-list the segments to get a fresh url.`,
+          `apple.com host or one of Apple's asp-<region> S3 buckets. If Apple handed this url ` +
+          `back from a segments listing it is a host this client does not know about yet, and ` +
+          `the allowlist needs it; otherwise re-list the segments to get a fresh url.`,
       );
     }
 

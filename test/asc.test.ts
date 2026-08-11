@@ -245,11 +245,33 @@ describe("AppStoreConnectClient.downloadSignedFile", () => {
     expect(await clientWith(fetchImpl).downloadSignedFile(SEGMENT_URL)).toBe(csv);
   });
 
-  it("refuses a url that is not on an apple.com host", async () => {
+  /**
+   * Apple does not serve segments from apple.com. They come from its own
+   * `asp-<region>` S3 buckets, so an allowlist of apple.com alone refuses every
+   * analytics download there is — the guard rejecting the only host the data ever
+   * arrives on, with no way past it.
+   */
+  it("accepts Apple's asp-<region> S3 buckets, which is where segments actually live", async () => {
+    const csv = "Date,Territory,Installations\n2026-08-13,US,3\n";
+    const fetchImpl = vi.fn(async () => new Response(gzipSync(Buffer.from(csv)), { status: 200 }));
+
+    const url = "https://asp-us-west-2.s3.amazonaws.com/segments/abc?X-Amz-Signature=xyz";
+    expect(await clientWith(fetchImpl).downloadSignedFile(url)).toBe(csv);
+    expect(callInit(fetchImpl).headers).not.toHaveProperty("Authorization");
+  });
+
+  it("refuses a host that is neither Apple nor one of its buckets", async () => {
     const fetchImpl = vi.fn(async () => new Response("nope", { status: 200 }));
 
     await expect(
       clientWith(fetchImpl).downloadSignedFile("https://evil.example.com/segments/abc"),
+    ).rejects.toThrow(/Refusing to download/);
+    // A bucket-shaped name on someone else's S3 account is still not Apple's.
+    await expect(
+      clientWith(fetchImpl).downloadSignedFile("https://asp-evil.s3.example.com/segments/abc"),
+    ).rejects.toThrow(/Refusing to download/);
+    await expect(
+      clientWith(fetchImpl).downloadSignedFile("http://asp-us-west-2.s3.amazonaws.com/segments/a"),
     ).rejects.toThrow(/Refusing to download/);
     expect(fetchImpl).not.toHaveBeenCalled();
   });
