@@ -2799,6 +2799,131 @@ describe("submission prerequisites", () => {
     });
   });
 
+  // The contact is the same person for every app and every version, so it lives
+  // in config.json. What matters is that "configured default" never turns into
+  // "silently rewrites App Store Connect".
+  describe("set_app_store_review_detail contact defaults", () => {
+    const CONTACT = {
+      firstName: "Ada",
+      lastName: "Lovelace",
+      email: "ada@example.com",
+      phone: "+33 1 23 45 67 89",
+    };
+
+    const callWithContact = async (
+      args: Record<string, unknown>,
+      fetchImpl: ReturnType<typeof vi.fn>,
+      // `null` means "configure no contact at all" — a default parameter cannot
+      // express that, since passing undefined re-applies the default.
+      contact: Record<string, string> | null = CONTACT,
+    ): ReturnType<Client["callTool"]> => {
+      const client = await connect(
+        { ...baseConfig, allowWrites: true, ...(contact ? { contact } : {}) },
+        fetchImpl as unknown as typeof fetch,
+      );
+      return client.callTool({
+        name: "app_store_connect_set_app_store_review_detail",
+        arguments: args,
+      });
+    };
+
+    /** A version whose review detail exists, with the attributes under test. */
+    const existing = (attributes: Record<string, unknown>): ReturnType<typeof vi.fn> =>
+      vi.fn(async () =>
+        jsonResponse({ data: { id: "rd-1", type: "appStoreReviewDetails", attributes } }),
+      );
+
+    it("fills every contact field from config when creating", async () => {
+      const fetchImpl = vi.fn(async (_url: string, init?: RequestInit) =>
+        (init?.method ?? "GET") === "GET"
+          ? notFound()
+          : jsonResponse({ data: { id: "rd-1", type: "appStoreReviewDetails" } }),
+      );
+
+      const result = await callWithContact({ versionId: VERSION_ID }, fetchImpl);
+
+      expect(result.isError).toBeFalsy();
+      const attributes = (
+        bodyOf(postCall(fetchImpl, "/v1/appStoreReviewDetails")?.[1]).data as Record<
+          string,
+          unknown
+        >
+      ).attributes as Record<string, unknown>;
+      expect(attributes.contactFirstName).toBe("Ada");
+      expect(attributes.contactLastName).toBe("Lovelace");
+      expect(attributes.contactEmail).toBe("ada@example.com");
+      expect(attributes.contactPhone).toBe("+33 1 23 45 67 89");
+      expect(textOf(result)).toContain("contactFromConfig");
+    });
+
+    it("lets an explicit argument win over the configured contact", async () => {
+      const fetchImpl = vi.fn(async (_url: string, init?: RequestInit) =>
+        (init?.method ?? "GET") === "GET"
+          ? notFound()
+          : jsonResponse({ data: { id: "rd-1", type: "appStoreReviewDetails" } }),
+      );
+
+      await callWithContact(
+        { versionId: VERSION_ID, contactEmail: "release@example.com" },
+        fetchImpl,
+      );
+
+      const attributes = (
+        bodyOf(postCall(fetchImpl, "/v1/appStoreReviewDetails")?.[1]).data as Record<
+          string,
+          unknown
+        >
+      ).attributes as Record<string, unknown>;
+      expect(attributes.contactEmail).toBe("release@example.com");
+      // The fields the caller stayed quiet about still come from config.
+      expect(attributes.contactFirstName).toBe("Ada");
+    });
+
+    // The whole point of gap-filling: editing `notes` must not rewrite a contact
+    // somebody set in the App Store Connect web UI.
+    it("leaves a differing existing value alone and reports the drift", async () => {
+      const fetchImpl = existing({
+        contactFirstName: "Grace",
+        contactEmail: "grace@example.com",
+      });
+
+      const result = await callWithContact(
+        { versionId: VERSION_ID, notes: "No account needed." },
+        fetchImpl,
+      );
+
+      const attributes = (bodyOf(patchCall(fetchImpl)?.[1]).data as Record<string, unknown>)
+        .attributes as Record<string, unknown>;
+      expect(attributes.contactFirstName).toBeUndefined();
+      expect(attributes.contactEmail).toBeUndefined();
+      // The gaps are still filled — only the disagreeing fields are held back.
+      expect(attributes.contactLastName).toBe("Lovelace");
+
+      const text = textOf(result);
+      expect(text).toContain("contactDrift");
+      expect(text).toContain("grace@example.com");
+    });
+
+    it("changes nothing when no contact is configured", async () => {
+      const fetchImpl = vi.fn(async (_url: string, init?: RequestInit) =>
+        (init?.method ?? "GET") === "GET"
+          ? notFound()
+          : jsonResponse({ data: { id: "rd-1", type: "appStoreReviewDetails" } }),
+      );
+
+      const result = await callWithContact({ versionId: VERSION_ID }, fetchImpl, null);
+
+      const attributes = (
+        bodyOf(postCall(fetchImpl, "/v1/appStoreReviewDetails")?.[1]).data as Record<
+          string,
+          unknown
+        >
+      ).attributes as Record<string, unknown>;
+      expect(attributes.contactFirstName).toBeUndefined();
+      expect(textOf(result)).not.toContain("contactFromConfig");
+    });
+  });
+
   describe("set_app_price", () => {
     it("refuses a price point from another territory before pricing anything", async () => {
       const fetchImpl = vi.fn(async () =>

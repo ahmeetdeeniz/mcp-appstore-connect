@@ -1,6 +1,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 
 import type { AppStoreConnectClient } from "../client/asc.js";
+import type { Contact } from "../config.js";
 import { registerAppInfoTools } from "./appinfos.js";
 import { registerAppTools } from "./apps.js";
 import { registerBuildTools } from "./builds.js";
@@ -32,6 +33,12 @@ export type ToolContext = {
    * that tells the caller where to write the files.
    */
   metadataRoot: string;
+  /**
+   * The configured App Review contact, used by set_app_store_review_detail to
+   * fill contact fields the caller did not pass. Optional: with none configured
+   * the tool behaves exactly as it did before.
+   */
+  contact?: Contact | undefined;
 };
 
 /**
@@ -55,7 +62,7 @@ export const registerTools = (
   // see the README before trying to add it back.
   registerCategoryTools(server, client, allowWrites);
   registerPricingTools(server, client, allowWrites);
-  registerReviewDetailTools(server, client, allowWrites);
+  registerReviewDetailTools(server, client, ctx);
   registerIapTools(server, client, allowWrites);
   registerListingTools(server, client, ctx);
   registerScreenshotTools(server, client, allowWrites);

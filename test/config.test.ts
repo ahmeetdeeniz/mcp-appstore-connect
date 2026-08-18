@@ -275,3 +275,49 @@ describe("resolveConfigPath", () => {
     expect(resolveConfigPath({ APP_STORE_CONNECT_CONFIG: "~/asc.json" })).not.toContain("~");
   });
 });
+
+describe("contact", () => {
+  const contact = {
+    firstName: "Ada",
+    lastName: "Lovelace",
+    email: "ada@example.com",
+    phone: "+33 1 23 45 67 89",
+  };
+
+  it("is undefined when nothing configures one", () => {
+    expect(loadConfig(baseEnv(), noConfig).contact).toBeUndefined();
+  });
+
+  it("reads a contact from the config file", () => {
+    const path = configFile({ ...fileCredentials(), contact });
+    expect(loadConfig({}, path).contact).toEqual(contact);
+  });
+
+  // Merged per field like every other setting, so one env var can correct one
+  // line of the file without restating the other three.
+  it("lets an env var override a single field", () => {
+    const path = configFile({ ...fileCredentials(), contact });
+    const config = loadConfig({ APP_STORE_CONNECT_CONTACT_EMAIL: "release@example.com" }, path);
+    expect(config.contact).toEqual({ ...contact, email: "release@example.com" });
+  });
+
+  it("accepts a partial contact", () => {
+    const path = configFile({ ...fileCredentials(), contact: { email: "ada@example.com" } });
+    expect(loadConfig({}, path).contact).toEqual({ email: "ada@example.com" });
+  });
+
+  // `.strict()` all the way down: a typo'd `firstname` must be an error rather
+  // than a contact that silently loses a field.
+  it("rejects an unknown key inside contact", () => {
+    const path = configFile({ ...fileCredentials(), contact: { firstname: "Ada" } });
+    expect(() => loadConfig({}, path)).toThrow(/contact.*[Uu]nrecognized key/s);
+  });
+
+  it("builds a contact from the environment alone", () => {
+    const config = loadConfig(
+      { ...baseEnv(), APP_STORE_CONNECT_CONTACT_FIRST_NAME: "Ada" },
+      noConfig,
+    );
+    expect(config.contact).toEqual({ firstName: "Ada" });
+  });
+});

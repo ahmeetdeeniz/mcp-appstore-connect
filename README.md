@@ -92,6 +92,12 @@ If you'd rather not put credentials in your shell profile or in every MCP client
   "p8Path": "~/path/to/AuthKey_XXXXXXXXXX.p8",
   "allowWrites": true,
   "vendorNumber": "80000123",
+  "contact": {
+    "firstName": "Ada",
+    "lastName": "Lovelace",
+    "email": "ada@example.com",
+    "phone": "+33 1 23 45 67 89",
+  },
 }
 ```
 
@@ -106,6 +112,7 @@ With this in place an MCP client needs no `env` block at all — just `npx -y @m
 - **The environment wins, field by field.** A config file supplies whatever the environment doesn't, so Docker and CI keep working exactly as before, and a one-off `APP_STORE_CONNECT_ALLOW_WRITES=0` still overrides a file that says `true`.
 - Keys are camelCase (`keyId`, not `APP_STORE_CONNECT_KEY_ID`), `~` is expanded in `p8Path`, and `p8` takes an inline PEM as the alternative to `p8Path`.
 - `vendorNumber` is the better home for it than an MCP client config: it isn't a credential (it does nothing without your API key), but it is an account identifier, and `.mcp.json` files are usually tracked by git. Run `get_vendor_number` to see which layer a running server picked it up from.
+- `contact` is the App Review contact — the person Apple phones or emails during review. It is the same person for every app and every version, so `set_app_store_review_detail` fills any contact field you omit from it. It only ever fills a **gap**: a value already on the record is left alone and reported back as `contactDrift`, so editing `notes` never silently rewrites a contact set in the web UI. Pass a contact field explicitly to override config for that call.
 - `metadataRoot` sets where this machine's repos keep their listing tree — useful if you prefer `"AppStore"` to the fastlane default. It must be repo-relative; use `"."` for the repo root.
 - **Unknown keys are an error**, not ignored — a typo'd `keyID` tells you so instead of silently falling back to the environment.
 - Location: `$APP_STORE_CONNECT_CONFIG`, else `$XDG_CONFIG_HOME/appstore-connect/config.json`, else `~/.config/appstore-connect/config.json`. An absent file is fine; a malformed one is reported with its path.

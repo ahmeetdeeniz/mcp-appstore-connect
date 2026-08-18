@@ -25,6 +25,28 @@ const metadataRootSchema = z.string().superRefine((value, ctx) => {
   }
 });
 
+/**
+ * The App Review contact: who Apple phones or emails if review has a question.
+ * Nested rather than four flat `contactFirstName` keys because it is one fact
+ * about a person, and it is the same person for every app and every version —
+ * which is the whole reason it is worth keeping here instead of retyping it
+ * into each `set_app_store_review_detail` call.
+ *
+ * Every field is optional. A half-filled contact is still useful: it fills the
+ * gaps it can and leaves the rest to the caller, which beats refusing to start
+ * because a phone number is missing.
+ */
+const contactSchema = z
+  .object({
+    firstName: z.string().min(1).optional(),
+    lastName: z.string().min(1).optional(),
+    email: z.string().min(1).optional(),
+    phone: z.string().min(1).optional(),
+  })
+  .strict();
+
+export type Contact = z.infer<typeof contactSchema>;
+
 const ConfigSchema = z
   .object({
     keyId: z.string().min(1, "APP_STORE_CONNECT_KEY_ID is required (the 10-char key id)"),
@@ -52,6 +74,7 @@ const ConfigSchema = z
     metadataRoot: metadataRootSchema
       .default(DEFAULT_METADATA_ROOT)
       .transform(normalizeMetadataRoot),
+    contact: contactSchema.optional(),
   })
   .strict();
 
@@ -76,6 +99,7 @@ const FileConfigSchema = z
     maxRetries: z.number().int().nonnegative().max(10).optional(),
     tokenTtlSeconds: z.number().int().min(60).max(1200).optional(),
     metadataRoot: metadataRootSchema.optional(),
+    contact: contactSchema.optional(),
   })
   .strict();
 
@@ -232,5 +256,26 @@ export const loadConfig = (
     tokenTtlSeconds: parseIntOpt(env.APP_STORE_CONNECT_TOKEN_TTL_SECONDS) ?? file.tokenTtlSeconds,
     // `trimmed` maps "" to undefined, so the repo root is spelled "." here.
     metadataRoot: trimmed(env.APP_STORE_CONNECT_METADATA_ROOT) ?? file.metadataRoot,
+    contact: mergeContact(env, file.contact),
   });
 };
+
+/**
+ * Merged per field like everything else, so `APP_STORE_CONNECT_CONTACT_EMAIL`
+ * can override one line of a file that supplies the other three. Returns
+ * undefined rather than `{}` when nothing is set anywhere: an empty object would
+ * read downstream as "a contact was configured" and suppress the hint telling
+ * you to configure one.
+ */
+const mergeContact = (env: NodeJS.ProcessEnv, file: Contact | undefined): Contact | undefined => {
+  const merged = compactContact({
+    firstName: trimmed(env.APP_STORE_CONNECT_CONTACT_FIRST_NAME) ?? file?.firstName,
+    lastName: trimmed(env.APP_STORE_CONNECT_CONTACT_LAST_NAME) ?? file?.lastName,
+    email: trimmed(env.APP_STORE_CONNECT_CONTACT_EMAIL) ?? file?.email,
+    phone: trimmed(env.APP_STORE_CONNECT_CONTACT_PHONE) ?? file?.phone,
+  });
+  return Object.keys(merged).length > 0 ? merged : undefined;
+};
+
+const compactContact = (contact: Contact): Contact =>
+  Object.fromEntries(Object.entries(contact).filter(([, v]) => v !== undefined));

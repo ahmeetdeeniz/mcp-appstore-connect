@@ -53,6 +53,7 @@ export const createServer = (opts: CreateServerOptions): CreatedServer => {
     vendorNumber: config.vendorNumber,
     vendorNumberSource: config.vendorNumberSource,
     metadataRoot: config.metadataRoot,
+    contact: config.contact,
   });
   return { server, client, tokenProvider };
 };

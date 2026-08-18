@@ -2,7 +2,9 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 
 import type { AppStoreConnectClient } from "../client/asc.js";
-import { resourceOf, summarizeResponse } from "../client/shape.js";
+import { attributesOf, resourceOf, summarizeResponse } from "../client/shape.js";
+import type { Contact } from "../config.js";
+import type { ToolContext } from "./index.js";
 import { compact, getOrNull, versionIdArg, wrap } from "./util.js";
 
 // App Review Information: who Apple contacts, and how they get into the app.
@@ -53,10 +55,66 @@ const reviewDetailId = (response: unknown): string | undefined => {
   return typeof id === "string" ? id : undefined;
 };
 
+/** Which review-detail attribute each configured contact field feeds. */
+const CONTACT_FIELDS = [
+  ["firstName", "contactFirstName"],
+  ["lastName", "contactLastName"],
+  ["email", "contactEmail"],
+  ["phone", "contactPhone"],
+] as const satisfies readonly (readonly [keyof Contact, string])[];
+
+type ContactDefaults = {
+  attributes: Record<string, unknown>;
+  /** Attributes this call is filling in from config, for the response. */
+  fromConfig: string[];
+  /** Attributes where the record disagrees with config, left as they are. */
+  drift: Record<string, { record: string; config: string }>;
+};
+
+const nonEmpty = (value: unknown): string | undefined =>
+  typeof value === "string" && value.trim() !== "" ? value : undefined;
+
+/**
+ * Fill contact attributes the caller left out from the configured contact.
+ *
+ * Precedence is explicit argument > whatever the record already holds > config.
+ * Config only ever fills a *gap*, so a contact set in the App Store Connect web
+ * UI is never silently rewritten by a call that meant to edit `notes`. On create
+ * there is no record, so all four come from config — which is the case that
+ * matters, since a version with no review detail cannot be submitted at all.
+ *
+ * A record value that disagrees with config is reported rather than corrected:
+ * drift you can see is a decision, drift that fixes itself is a surprise write.
+ */
+const applyContactDefaults = (
+  attributes: Record<string, unknown>,
+  existing: Record<string, unknown>,
+  contact: Contact | undefined,
+): ContactDefaults => {
+  const result: ContactDefaults = { attributes: { ...attributes }, fromConfig: [], drift: {} };
+  if (!contact) return result;
+
+  for (const [key, attribute] of CONTACT_FIELDS) {
+    const configured = nonEmpty(contact[key]);
+    if (configured === undefined) continue;
+    // The caller was explicit — nothing to default, and nothing to report.
+    if (nonEmpty(attributes[attribute]) !== undefined) continue;
+
+    const current = nonEmpty(existing[attribute]);
+    if (current === undefined) {
+      result.attributes[attribute] = configured;
+      result.fromConfig.push(attribute);
+    } else if (current !== configured) {
+      result.drift[attribute] = { record: current, config: configured };
+    }
+  }
+  return result;
+};
+
 export const registerReviewDetailTools = (
   server: McpServer,
   client: AppStoreConnectClient,
-  allowWrites: boolean,
+  { allowWrites, contact }: ToolContext,
 ): void => {
   server.registerTool(
     "app_store_connect_get_app_store_review_detail",
@@ -99,15 +157,34 @@ export const registerReviewDetailTools = (
         "Required before submitting: a version with none is refused, and the error names a " +
         "missing relationship rather than the missing contact details. Only the fields you pass " +
         "are changed on an existing record. The contact is who Apple phones or emails if review " +
-        "has a question, so it must be a real person who will answer.",
+        "has a question, so it must be a real person who will answer — omit the contact " +
+        "fields to use the one configured in config.json, which only fills what the record " +
+        "is missing and reports any value that disagrees with it.",
       inputSchema: { versionId: versionIdArg, ...reviewDetailFields },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
     },
     async ({ versionId, ...attributes }) =>
       wrap(async () => {
-        const existingId = reviewDetailId(
-          await getOrNull(client, `/v1/appStoreVersions/${versionId}/appStoreReviewDetail`),
+        const existing = await getOrNull(
+          client,
+          `/v1/appStoreVersions/${versionId}/appStoreReviewDetail`,
         );
+        const existingId = reviewDetailId(existing);
+
+        // The GET above already had to happen to choose the verb, so the current
+        // attributes are free — which is what makes gap-filling possible without
+        // a second round trip.
+        const defaults = applyContactDefaults(
+          compact(attributes),
+          attributesOf(resourceOf(existing)),
+          contact,
+        );
+        // Reported alongside the write so filling in a contact from config is
+        // visible in the result rather than inferred from Apple's echo.
+        const report = {
+          ...(defaults.fromConfig.length > 0 ? { contactFromConfig: defaults.fromConfig } : {}),
+          ...(Object.keys(defaults.drift).length > 0 ? { contactDrift: defaults.drift } : {}),
+        };
 
         // PATCH and POST are not interchangeable here: PATCH against a version
         // that has no detail 404s, and POST against one that does 409s with a
@@ -117,11 +194,12 @@ export const registerReviewDetailTools = (
         if (existingId === undefined) {
           return {
             created: true,
+            ...report,
             ...(summarizeResponse(
               await client.post("/v1/appStoreReviewDetails", {
                 data: {
                   type: "appStoreReviewDetails",
-                  attributes: compact(attributes),
+                  attributes: defaults.attributes,
                   relationships: {
                     appStoreVersion: { data: { type: "appStoreVersions", id: versionId } },
                   },
@@ -133,12 +211,13 @@ export const registerReviewDetailTools = (
 
         return {
           created: false,
+          ...report,
           ...(summarizeResponse(
             await client.patch(`/v1/appStoreReviewDetails/${existingId}`, {
               data: {
                 type: "appStoreReviewDetails",
                 id: existingId,
-                attributes: compact(attributes),
+                attributes: defaults.attributes,
               },
             }),
           ) as Record<string, unknown>),
