@@ -1067,10 +1067,12 @@ describe("submit_version_for_review", () => {
     inFlight?: unknown[];
     /** Not-yet-submitted drafts to reuse. */
     drafts?: unknown[];
+    /** Submissions Apple rejected and handed back (UNRESOLVED_ISSUES). */
+    returned?: unknown[];
     items?: unknown[];
   };
 
-  /** Route by URL, method and `filter[state]` — the two list GETs share a path. */
+  /** Route by URL, method and `filter[state]` — the three list GETs share a path. */
   const routed = (routes: Routes = {}): ReturnType<typeof vi.fn> =>
     vi.fn(async (url: string, init?: RequestInit) => {
       const parsed = new URL(url);
@@ -1081,8 +1083,9 @@ describe("submit_version_for_review", () => {
         return jsonResponse({ data: routes.items ?? [] });
       }
       if (parsed.pathname.endsWith("/reviewSubmissions") && method === "GET") {
-        const drafts = state === "READY_FOR_REVIEW";
-        return jsonResponse({ data: (drafts ? routes.drafts : routes.inFlight) ?? [] });
+        if (state === "READY_FOR_REVIEW") return jsonResponse({ data: routes.drafts ?? [] });
+        if (state === "UNRESOLVED_ISSUES") return jsonResponse({ data: routes.returned ?? [] });
+        return jsonResponse({ data: routes.inFlight ?? [] });
       }
       if (parsed.pathname.endsWith("/reviewSubmissions") && method === "POST") {
         return jsonResponse({ data: submission("READY_FOR_REVIEW") });
@@ -1135,6 +1138,67 @@ describe("submit_version_for_review", () => {
       `https://api.appstoreconnect.apple.com/v1/reviewSubmissions/${SUBMISSION_ID}`,
     );
     expect(JSON.parse(String(patch?.[1].body)).data.attributes).toEqual({ submitted: true });
+  });
+
+  /**
+   * The path back after a rejection. Cancelling and starting clean is the
+   * expensive wrong answer: it forfeits the queue position and restarts the
+   * review of anything else riding along, so the same submission has to go back.
+   */
+  it("resubmits a rejected submission instead of creating a new one", async () => {
+    const fetchImpl = routed({
+      returned: [submission("UNRESOLVED_ISSUES")],
+      items: [
+        { id: "item-version", type: "reviewSubmissionItems", attributes: { state: "REJECTED" } },
+        {
+          id: "item-iap",
+          type: "reviewSubmissionItems",
+          attributes: { state: "READY_FOR_REVIEW" },
+        },
+      ],
+    });
+
+    const result = await callTool({ versionId: VERSION_ID, confirm: true }, fetchImpl);
+
+    expect(result.isError).toBeFalsy();
+    expect(postCall(fetchImpl, "/v1/reviewSubmissions")).toBeUndefined();
+    expect(postCall(fetchImpl, "/v1/reviewSubmissionItems")).toBeUndefined();
+
+    const patches = fetchImpl.mock.calls.filter(
+      (call) => (call[1] as RequestInit | undefined)?.method === "PATCH",
+    ) as [string, RequestInit][];
+
+    // Only the rejected item is resolved. The one still READY_FOR_REVIEW is an
+    // in-app purchase Apple had already started on, and touching it would send
+    // it back to the start.
+    const resolved = patches.filter(([url]) => url.includes("/reviewSubmissionItems/"));
+    expect(resolved).toHaveLength(1);
+    expect(resolved[0]?.[0]).toContain("/reviewSubmissionItems/item-version");
+    expect(JSON.parse(String(resolved[0]?.[1].body)).data.attributes).toEqual({ resolved: true });
+
+    const submit = patches.find(([url]) => url.endsWith(`/reviewSubmissions/${SUBMISSION_ID}`));
+    expect(JSON.parse(String(submit?.[1].body)).data.attributes).toEqual({ submitted: true });
+  });
+
+  it("refuses to resubmit when the rejected submission holds another version", async () => {
+    const fetchImpl = routed({
+      returned: [
+        {
+          ...(submission("UNRESOLVED_ISSUES") as Record<string, unknown>),
+          relationships: {
+            appStoreVersionForReview: {
+              data: { id: "some-other-version", type: "appStoreVersions" },
+            },
+          },
+        },
+      ],
+    });
+
+    const result = await callTool({ versionId: VERSION_ID, confirm: true }, fetchImpl);
+
+    expect(result.isError).toBeTruthy();
+    expect(textOf(result)).toContain("different version");
+    expect(patchCall(fetchImpl)).toBeUndefined();
   });
 
   it("reuses an existing draft rather than creating a second one", async () => {

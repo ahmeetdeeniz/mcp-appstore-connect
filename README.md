@@ -232,6 +232,17 @@ A **free** app still needs a price: "free" is a price point, not the absence of 
 >
 > **`submit_version_for_review` succeeds and silently leaves the IAP behind.** The version goes to review alone, the IAP stays `READY_TO_SUBMIT`, and the app ships with a paywall selling a product Apple never approved. So after submitting a release that introduces one, re-read `list_in_app_purchases`: a first IAP still reading `READY_TO_SUBMIT` means it was left out. Recovering means cancelling the submission — which returns the version to `DEVELOPER_REJECTED`, still submittable — and using the version page's **Add for Review** panel, which lists the IAP beside the version. Second and later IAPs go through `submit_in_app_purchase_for_review` normally.
 
+> **After a rejection, resubmit the same submission — never cancel it.** Apple hands a rejected submission back as `UNRESOLVED_ISSUES`, which reads like a state that is still with Apple and is not: it is yours to edit again. `submit_version_for_review` detects it, `PATCH`es each `REJECTED` item with `{"resolved": true}` (the web UI's **Update review**), then `PATCH`es the submission with `{"submitted": true}` (**Resubmit to App Review**). The submission keeps its queue position, and every item that was _not_ rejected goes back untouched — which matters most for a first non-consumable IAP riding inside it, since that one is often already `IN_REVIEW` while the version was being rejected.
+>
+> Cancelling instead is unrecoverable in a way that costs real days: the queue position is gone, and the IAP is dragged back out of review to start over. The failure to recognise looks like this — attempting to open a _new_ submission alongside the returned one 409s, and the error blames the version while never mentioning the submission that actually holds it:
+>
+> ```
+> STATE_ERROR.ENTITY_STATE_INVALID: appStoreVersions with id '…' is not in valid state.
+> STATE_ERROR: Version is not ready to be submitted yet, please try again later.
+> ```
+>
+> "Try again later" is misdirection: waiting never clears it, because nothing is in progress.
+
 **Listing round-trip** — `export_listing`, _`apply_listing`_\* — pull the whole listing into a git-committable metadata tree, edit it locally, push it back. See [Listing round-trip](#listing-round-trip).
 
 **Versions & metadata** — `list_versions`, `get_version` (resolves the attached build — which binary the version would actually ship, and when it was uploaded), `list_version_localizations`, `get_version_localization`, _`create_version`_\*, _`update_version`_\* (release type — auto on approval, manual, or scheduled), _`update_version_localization`_\* (description, keywords, what's-new, promo text)
