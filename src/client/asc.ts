@@ -380,9 +380,7 @@ export class AppStoreConnectClient {
     // The reasons a submission is refused arrive nested rather than in `detail`, and the outer
     // error only says to go and look at them. Spell them out, or the caller is told the version
     // "is not in valid state" and nothing about which six things are missing.
-    const associated = flattenAssociatedErrors(errors)
-      .map(formatAssociatedError)
-      .filter(Boolean);
+    const associated = flattenAssociatedErrors(errors).map(formatAssociatedError).filter(Boolean);
     const because = associated.length > 0 ? ` Because: ${associated.join("; ")}` : "";
     return base + (detail ? ` — ${detail}` : "") + because;
   }

@@ -1141,6 +1141,24 @@ describe("submit_version_for_review", () => {
   });
 
   /**
+   * Adding the item IS the preflight — Apple adjudicates readiness there and answers an
+   * unready version with the full list of what is unset — so a dry run has to go that far and
+   * then stop. What it must never do is PATCH `submitted: true`.
+   */
+  it("dryRun adds the version to the draft but never hands it to Apple", async () => {
+    const fetchImpl = routed();
+
+    const result = await callTool(
+      { versionId: VERSION_ID, dryRun: true, confirm: true },
+      fetchImpl,
+    );
+
+    expect(result.isError).toBeFalsy();
+    expect(postCall(fetchImpl, "/v1/reviewSubmissionItems")).toBeDefined();
+    expect(patchCall(fetchImpl)).toBeUndefined();
+  });
+
+  /**
    * The path back after a rejection. Cancelling and starting clean is the
    * expensive wrong answer: it forfeits the queue position and restarts the
    * review of anything else riding along, so the same submission has to go back.

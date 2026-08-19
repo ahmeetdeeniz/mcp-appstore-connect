@@ -17,6 +17,7 @@ import {
   appIdArg,
   compact,
   confirmArg,
+  dryRunArg,
   limitArg,
   versionIdArg,
   wrap,
@@ -209,11 +210,15 @@ export const registerSubmissionTools = (
         "back, which keeps its queue position and leaves any in-app purchase already under " +
         "review where it is. Do NOT cancel a rejected submission to start a clean one. " +
         "Once submitted the version is with Apple — use " +
-        "app_store_connect_cancel_review_submission to withdraw it.",
-      inputSchema: { versionId: versionIdArg, confirm: confirmArg },
+        "app_store_connect_cancel_review_submission to withdraw it. " +
+        "Pass dryRun to preflight instead: it stops before handing anything to Apple, and when " +
+        "the version is not ready it surfaces every reason Apple gives — a missing primary " +
+        "category, unanswered export compliance on the build, unset pricing, unpublished app " +
+        "privacy — which is otherwise only visible by attempting a real submission.",
+      inputSchema: { versionId: versionIdArg, dryRun: dryRunArg, confirm: confirmArg },
       annotations: { readOnlyHint: false, destructiveHint: false },
     },
-    async ({ versionId }) =>
+    async ({ versionId, dryRun = false }) =>
       wrap(async () => {
         // `app` must be included explicitly: unlike `build`, Apple omits that
         // relationship entirely from a bare GET, so the app id is not derivable
@@ -340,6 +345,10 @@ export const registerSubmissionTools = (
             versionId,
           );
 
+        // Adding the item is where Apple actually adjudicates readiness: it answers a version
+        // that cannot be reviewed with the full list of what is unset, nested under
+        // `meta.associatedErrors`. That makes this call the preflight, and it is why dryRun
+        // stops *after* it rather than before — there is no cheaper way to ask.
         if (!alreadyAdded) {
           await client.post("/v1/reviewSubmissionItems", {
             data: {
@@ -350,6 +359,22 @@ export const registerSubmissionTools = (
               },
             },
           });
+        }
+
+        if (dryRun) {
+          return {
+            submissionId,
+            versionId,
+            reusedDraft,
+            addedItem: !alreadyAdded,
+            dryRun: true,
+            submitted: false,
+            note:
+              "The version is ready: it was accepted onto the draft submission, which is still " +
+              "yours and has NOT been sent to Apple. Re-run without dryRun to submit. Note that " +
+              "an app's first non-consumable in-app purchase cannot ride along — see " +
+              "app_store_connect_submit_in_app_purchase_for_review.",
+          };
         }
 
         const submitted = await client.patch(`/v1/reviewSubmissions/${submissionId}`, {

@@ -120,6 +120,17 @@ export const confirmArg = z
   .literal(true)
   .describe("Must be true. Explicit acknowledgement that this changes App Store Connect state.");
 
+/**
+ * Opt-in preflight. Defaults to false, so adding it never turns an existing call into a no-op.
+ *
+ * Still requires `confirm`, and deliberately: a dry run of a submission creates the draft and
+ * adds the version to it. Only the irreversible step — handing it to Apple — is skipped.
+ */
+export const dryRunArg = z
+  .boolean()
+  .default(false)
+  .describe("Stop before the irreversible step and report what would happen. Defaults to false.");
+
 /** Drop undefined values so we never send `{"filter[x]": undefined}` upstream. */
 export const compact = <T extends Record<string, unknown>>(obj: T): Partial<T> =>
   Object.fromEntries(Object.entries(obj).filter(([, v]) => v !== undefined)) as Partial<T>;

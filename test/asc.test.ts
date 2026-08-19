@@ -147,7 +147,9 @@ describe("AppStoreConnectClient retry & errors", () => {
       maxRetries: 0,
     });
 
-    const error = (await client.post("/v1/reviewSubmissionItems", {}).catch((e: unknown) => e)) as Error;
+    const error = (await client
+      .post("/v1/reviewSubmissionItems", {})
+      .catch((e: unknown) => e)) as Error;
 
     expect(error.message).toMatch(/primaryCategory/);
     expect(error.message).toMatch(/APP_PRICING_REQUIRED/);
