@@ -104,6 +104,55 @@ describe("AppStoreConnectClient retry & errors", () => {
       (await client.get("/v1/apps/nope").catch((e) => e)) instanceof AppStoreConnectApiError,
     ).toBe(true);
   });
+
+  it("spells out meta.associatedErrors, which is where a refused submission says why", async () => {
+    // Shape taken from a real POST /v1/reviewSubmissionItems. The outer error only says to go
+    // and look at the associated ones, so dropping them leaves the caller with "is not in valid
+    // state" and no indication of which separate things are unset.
+    const fetchImpl = vi.fn(async () =>
+      jsonResponse(
+        {
+          errors: [
+            {
+              status: "409",
+              code: "STATE_ERROR.ENTITY_STATE_INVALID",
+              title: "appStoreVersions with id 'v-1' is not in valid state.",
+              detail:
+                "This resource cannot be reviewed, please check associated errors to see why.",
+              meta: {
+                associatedErrors: {
+                  "/v1/appInfos/ai-1": [
+                    {
+                      code: "ENTITY_ERROR.RELATIONSHIP.REQUIRED",
+                      detail: "You must provide a value for the relationship 'primaryCategory'",
+                    },
+                  ],
+                  "/v2/appPrices/": [
+                    {
+                      code: "STATE_ERROR.APP_PRICING_REQUIRED",
+                      detail: "App is not eligible for submission until pricing has been set.",
+                    },
+                  ],
+                },
+              },
+            },
+          ],
+        },
+        409,
+      ),
+    );
+    const client = new AppStoreConnectClient({
+      tokenProvider: spyProvider(),
+      fetch: fetchImpl as unknown as typeof fetch,
+      maxRetries: 0,
+    });
+
+    const error = (await client.post("/v1/reviewSubmissionItems", {}).catch((e: unknown) => e)) as Error;
+
+    expect(error.message).toMatch(/primaryCategory/);
+    expect(error.message).toMatch(/APP_PRICING_REQUIRED/);
+    expect(error.message).toMatch(/\/v1\/appInfos\/ai-1/);
+  });
 });
 
 const uploadClient = (

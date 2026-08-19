@@ -1,7 +1,12 @@
 import { gunzipSync } from "node:zlib";
 
 import type { Logger, TokenProvider } from "./auth.js";
-import { type AppStoreConnectError, AppStoreConnectApiError } from "./errors.js";
+import {
+  type AppStoreConnectError,
+  AppStoreConnectApiError,
+  flattenAssociatedErrors,
+  formatAssociatedError,
+} from "./errors.js";
 
 export type QueryValue = string | number | boolean | string[] | undefined;
 export type Query = Record<string, QueryValue>;
@@ -372,7 +377,14 @@ export class AppStoreConnectClient {
     if (res.status === 403) {
       return `${base} — authenticated, but this API key's role lacks permission for this resource${detail ? ` (${detail})` : ""}`;
     }
-    return base + (detail ? ` — ${detail}` : "");
+    // The reasons a submission is refused arrive nested rather than in `detail`, and the outer
+    // error only says to go and look at them. Spell them out, or the caller is told the version
+    // "is not in valid state" and nothing about which six things are missing.
+    const associated = flattenAssociatedErrors(errors)
+      .map(formatAssociatedError)
+      .filter(Boolean);
+    const because = associated.length > 0 ? ` Because: ${associated.join("; ")}` : "";
+    return base + (detail ? ` — ${detail}` : "") + because;
   }
 
   get<T = unknown>(path: string, query?: Query): Promise<T> {
