@@ -1158,6 +1158,79 @@ describe("submit_version_for_review", () => {
     expect(patchCall(fetchImpl)).toBeUndefined();
   });
 
+  /** An item already on the draft, which is what `containsVersion` matches on. */
+  const stagedItem = {
+    id: "item-1",
+    type: "reviewSubmissionItems",
+    relationships: { appStoreVersion: { data: { id: VERSION_ID, type: "appStoreVersions" } } },
+  };
+
+  /**
+   * The bug this guards: staging moves the version to READY_FOR_REVIEW, which is not a
+   * submittable state, so the state guard used to refuse every call after the first — and
+   * since `dryRun` always stages, its own preflight locked the caller out of finishing.
+   * Nothing else in the server can submit an existing draft, so the submission was stranded.
+   */
+  it("resumes a version already staged on the app's own draft", async () => {
+    const fetchImpl = routed({
+      version: (withApp) => versionBody({ appStoreState: "READY_FOR_REVIEW" }, {}, withApp),
+      drafts: [submission("READY_FOR_REVIEW")],
+      items: [stagedItem],
+    });
+
+    const result = await callTool({ versionId: VERSION_ID, confirm: true }, fetchImpl);
+
+    expect(result.isError).toBeFalsy();
+    // The item is already there; adding it again is what Apple 409s on.
+    expect(postCall(fetchImpl, "/v1/reviewSubmissionItems")).toBeUndefined();
+    const patch = patchCall(fetchImpl);
+    expect(patch?.[0]).toBe(
+      `https://api.appstoreconnect.apple.com/v1/reviewSubmissions/${SUBMISSION_ID}`,
+    );
+    expect(JSON.parse(String(patch?.[1].body)).data.attributes).toEqual({ submitted: true });
+    expect(JSON.parse(textOf(result)).resumedDraft).toBe(true);
+  });
+
+  it("dryRun on an already-staged version reports it without submitting", async () => {
+    const fetchImpl = routed({
+      version: (withApp) => versionBody({ appStoreState: "READY_FOR_REVIEW" }, {}, withApp),
+      drafts: [submission("READY_FOR_REVIEW")],
+      items: [stagedItem],
+    });
+
+    const result = await callTool(
+      { versionId: VERSION_ID, dryRun: true, confirm: true },
+      fetchImpl,
+    );
+
+    expect(result.isError).toBeFalsy();
+    expect(patchCall(fetchImpl)).toBeUndefined();
+    expect(JSON.parse(textOf(result)).submitted).toBe(false);
+  });
+
+  /**
+   * The resubmit branch used to ignore `dryRun` outright, so a preflight against a rejected
+   * submission resolved its items and handed it back to Apple for real — the exact thing the
+   * flag exists to prevent, on the one branch where it is least recoverable.
+   */
+  it("dryRun never resubmits a rejected submission", async () => {
+    const fetchImpl = routed({
+      returned: [submission("UNRESOLVED_ISSUES")],
+      items: [{ id: "item-1", type: "reviewSubmissionItems", attributes: { state: "REJECTED" } }],
+    });
+
+    const result = await callTool(
+      { versionId: VERSION_ID, dryRun: true, confirm: true },
+      fetchImpl,
+    );
+
+    expect(result.isError).toBeFalsy();
+    expect(patchCall(fetchImpl)).toBeUndefined();
+    const body = JSON.parse(textOf(result));
+    expect(body.submitted).toBe(false);
+    expect(body.wouldResolveItems).toBe(1);
+  });
+
   /**
    * The path back after a rejection. Cancelling and starting clean is the
    * expensive wrong answer: it forfeits the queue position and restarts the

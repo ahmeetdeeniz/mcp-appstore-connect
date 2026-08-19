@@ -64,6 +64,13 @@ const REJECTED_ITEM_STATE = "REJECTED";
  * Version states Apple still accepts into a review submission. The rejected ones
  * are editable again after review, so resubmitting them is the normal path back.
  */
+/**
+ * A version that has already been added to a draft submission. Spelled the same as
+ * `DRAFT_STATE` but read off the *version*, not the submission — Apple reuses the
+ * word for both, and conflating them is how this state ends up looking submittable.
+ */
+const STAGED_VERSION_STATE = "READY_FOR_REVIEW";
+
 const SUBMITTABLE_STATES = [
   "PREPARE_FOR_SUBMISSION",
   "DEVELOPER_REJECTED",
@@ -105,6 +112,48 @@ const containsVersion = (itemsResponse: unknown, versionId: string): boolean => 
   return included.some(
     (res) => isRecord(res) && res.type === "appStoreVersions" && res.id === versionId,
   );
+};
+
+/**
+ * The app's own draft submission already holding this version, if there is one.
+ *
+ * ⚠️ Consulted *before* `assertSubmittable`, and that ordering is the entire point.
+ * Adding the item moves the version to READY_FOR_REVIEW, which is not a submittable
+ * state — so once a run has staged a version, and every `dryRun` does, the state
+ * guard refuses every later attempt and nothing in this server can finish what was
+ * started. The draft holding the version is the evidence that the half-done work is
+ * the caller's own, which is what turns that lockout into a resume.
+ */
+const findStagedDraft = async (
+  client: AppStoreConnectClient,
+  versionResponse: unknown,
+  versionId: string,
+): Promise<string | undefined> => {
+  const version = resourceOf(versionResponse);
+  const attrs = attributesOf(version);
+  if (attrs.appStoreState !== STAGED_VERSION_STATE) return undefined;
+
+  const appId = relatedId(version, "app");
+  const platform = attrs.platform;
+  // Nothing to look up without both; `assertSubmittable` reports the missing one.
+  if (typeof appId !== "string" || typeof platform !== "string") return undefined;
+
+  const drafts = resourcesOf(
+    await client.get(`/v1/apps/${appId}/reviewSubmissions`, {
+      "filter[platform]": platform,
+      "filter[state]": DRAFT_STATE,
+      limit: 10,
+    }),
+  );
+  for (const draft of drafts) {
+    const submissionId = String(draft.id);
+    const items = await client.get(`/v1/reviewSubmissions/${submissionId}/items`, {
+      include: "appStoreVersion",
+      limit: 50,
+    });
+    if (containsVersion(items, versionId)) return submissionId;
+  }
+  return undefined;
 };
 
 /**
@@ -214,7 +263,9 @@ export const registerSubmissionTools = (
         "Pass dryRun to preflight instead: it stops before handing anything to Apple, and when " +
         "the version is not ready it surfaces every reason Apple gives — a missing primary " +
         "category, unanswered export compliance on the build, unset pricing, unpublished app " +
-        "privacy — which is otherwise only visible by attempting a real submission.",
+        "privacy — which is otherwise only visible by attempting a real submission. A dry run " +
+        "of a draft does stage the version on it, which moves the version to READY_FOR_REVIEW; " +
+        "calling again without dryRun finishes that same submission.",
       inputSchema: { versionId: versionIdArg, dryRun: dryRunArg, confirm: confirmArg },
       annotations: { readOnlyHint: false, destructiveHint: false },
     },
@@ -223,9 +274,50 @@ export const registerSubmissionTools = (
         // `app` must be included explicitly: unlike `build`, Apple omits that
         // relationship entirely from a bare GET, so the app id is not derivable
         // without it.
-        const { appId, platform } = assertSubmittable(
-          await client.get(`/v1/appStoreVersions/${versionId}`, { include: "app,build" }),
-        );
+        const versionResponse = await client.get(`/v1/appStoreVersions/${versionId}`, {
+          include: "app,build",
+        });
+
+        // A version sitting on this app's own draft is a submission half-finished,
+        // not a submission refused — and the commonest way to get here is this
+        // tool's own dryRun, which stages the version deliberately. Resuming is
+        // handled before `assertSubmittable`, which refuses READY_FOR_REVIEW and
+        // would otherwise make the preflight a one-way door.
+        const stagedSubmissionId = await findStagedDraft(client, versionResponse, versionId);
+        if (stagedSubmissionId !== undefined) {
+          if (dryRun) {
+            return {
+              submissionId: stagedSubmissionId,
+              versionId,
+              reusedDraft: true,
+              addedItem: false,
+              dryRun: true,
+              submitted: false,
+              note:
+                "Already staged on this app's draft submission and NOT handed to Apple. " +
+                "Apple accepted the version onto the draft, so it is ready. Re-run without " +
+                "dryRun to submit it.",
+            };
+          }
+
+          const resumed = await client.patch(`/v1/reviewSubmissions/${stagedSubmissionId}`, {
+            data: {
+              type: "reviewSubmissions",
+              id: stagedSubmissionId,
+              attributes: { submitted: true },
+            },
+          });
+
+          return {
+            submissionId: stagedSubmissionId,
+            versionId,
+            resumedDraft: true,
+            addedItem: false,
+            submission: summarizeResponse(resumed),
+          };
+        }
+
+        const { appId, platform } = assertSubmittable(versionResponse);
 
         // A rejection comes back as a submission the developer owns again, and
         // it is the same submission that goes back to Apple. Handled before the
@@ -270,6 +362,27 @@ export const registerSubmissionTools = (
           // that is how an in-app purchase keeps the review it had already
           // started rather than beginning again.
           const rejected = items.filter((item) => attributesOf(item).state === REJECTED_ITEM_STATE);
+
+          // ⚠️ Nothing is written on a dry run of this branch. Unlike the draft path,
+          // where staging the item IS the preflight Apple answers, resolving items
+          // here buys no diagnostic — and the PATCH after it hands the submission
+          // straight back to Apple. A dryRun that resubmits is the one thing the
+          // flag exists to prevent.
+          if (dryRun) {
+            return {
+              submissionId,
+              versionId,
+              resubmitted: false,
+              dryRun: true,
+              submitted: false,
+              wouldResolveItems: rejected.length,
+              note:
+                "This app has a rejected submission holding this version. Re-running without " +
+                "dryRun resolves its rejected item(s) and sends the same submission back, " +
+                "keeping its queue position. Nothing has been written.",
+            };
+          }
+
           for (const item of rejected) {
             await client.patch(`/v1/reviewSubmissionItems/${String(item.id)}`, {
               data: {
@@ -349,6 +462,10 @@ export const registerSubmissionTools = (
         // that cannot be reviewed with the full list of what is unset, nested under
         // `meta.associatedErrors`. That makes this call the preflight, and it is why dryRun
         // stops *after* it rather than before — there is no cheaper way to ask.
+        //
+        // The cost is that it moves the version to READY_FOR_REVIEW, which `assertSubmittable`
+        // refuses. `findStagedDraft` above is what keeps that from being a one-way door: the
+        // next call finds this draft and finishes the submission instead of being turned away.
         if (!alreadyAdded) {
           await client.post("/v1/reviewSubmissionItems", {
             data: {
@@ -370,9 +487,10 @@ export const registerSubmissionTools = (
             dryRun: true,
             submitted: false,
             note:
-              "The version is ready: it was accepted onto the draft submission, which is still " +
-              "yours and has NOT been sent to Apple. Re-run without dryRun to submit. Note that " +
-              "an app's first non-consumable in-app purchase cannot ride along — see " +
+              "The version is ready: Apple accepted it onto the draft submission, which is " +
+              "still yours and has NOT been sent for review. Staging it moved the version to " +
+              "READY_FOR_REVIEW, so re-run without dryRun to finish the submission from here. " +
+              "Note that an app's first non-consumable in-app purchase cannot ride along — see " +
               "app_store_connect_submit_in_app_purchase_for_review.",
           };
         }

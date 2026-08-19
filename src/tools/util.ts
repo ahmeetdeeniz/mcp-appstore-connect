@@ -125,6 +125,9 @@ export const confirmArg = z
  *
  * Still requires `confirm`, and deliberately: a dry run of a submission creates the draft and
  * adds the version to it. Only the irreversible step — handing it to Apple — is skipped.
+ *
+ * Staging moves the version to READY_FOR_REVIEW, which is not a submittable state, so the
+ * submit tool has to be able to resume from its own dry run rather than refuse it.
  */
 export const dryRunArg = z
   .boolean()
