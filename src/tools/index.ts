@@ -7,6 +7,7 @@ import { registerAppTools } from "./apps.js";
 import { registerBuildTools } from "./builds.js";
 import { registerBundleIdTools } from "./bundleids.js";
 import { registerCategoryTools } from "./categories.js";
+import { registerCertificateTools } from "./certificates.js";
 import { registerCustomerReviewTools } from "./customerreviews.js";
 import { registerDeviceTools } from "./devices.js";
 import { registerIapTools } from "./iap.js";
@@ -73,4 +74,5 @@ export const registerTools = (
   registerUserTools(server, client, allowWrites);
   registerBundleIdTools(server, client, allowWrites);
   registerDeviceTools(server, client, allowWrites);
+  registerCertificateTools(server, client, allowWrites);
 };

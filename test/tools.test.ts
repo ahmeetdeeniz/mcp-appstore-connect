@@ -3283,3 +3283,99 @@ describe("submission prerequisites", () => {
     });
   });
 });
+
+describe("certificates", () => {
+  const certAttributes = {
+    certificateType: "DEVELOPER_ID_APPLICATION",
+    displayName: "Magenta Creations",
+    name: "Developer ID Application: Magenta Creations",
+    platform: "MAC_OS",
+    serialNumber: "1A2B3C",
+    expirationDate: "2031-01-01T00:00:00.000+00:00",
+    // Apple returns the certificate as base64 DER. "hello" as bytes.
+    certificateContent: Buffer.from("hello").toString("base64"),
+    csrContent: "-----BEGIN CERTIFICATE REQUEST-----\nblob\n-----END CERTIFICATE REQUEST-----",
+  };
+
+  const certResponse = (single = false): unknown => ({
+    data: single
+      ? { id: "cert-1", type: "certificates", attributes: certAttributes }
+      : [{ id: "cert-1", type: "certificates", attributes: certAttributes }],
+  });
+
+  it("hides the mutating tools unless writes are allowed", async () => {
+    const readOnly = await toolNames(await connect(baseConfig));
+    expect(readOnly).toContain("app_store_connect_list_certificates");
+    expect(readOnly).toContain("app_store_connect_download_certificate");
+    expect(readOnly).not.toContain("app_store_connect_create_certificate");
+    expect(readOnly).not.toContain("app_store_connect_revoke_certificate");
+
+    const writable = await toolNames(await connect({ ...baseConfig, allowWrites: true }));
+    expect(writable).toContain("app_store_connect_create_certificate");
+    expect(writable).toContain("app_store_connect_revoke_certificate");
+  });
+
+  it("omits the base64 blobs from a listing", async () => {
+    const fetchImpl = vi.fn(async () => jsonResponse(certResponse()));
+    const client = await connect(baseConfig, fetchImpl as unknown as typeof fetch);
+    const text = textOf(
+      await client.callTool({ name: "app_store_connect_list_certificates", arguments: {} }),
+    );
+
+    // The useful fields survive...
+    expect(text).toContain("DEVELOPER_ID_APPLICATION");
+    expect(text).toContain("1A2B3C");
+    // ...and the multi-kilobyte ones do not reach the caller's context.
+    expect(text).toContain("<omitted>");
+    expect(text).not.toContain(certAttributes.certificateContent);
+    expect(text).not.toContain("BEGIN CERTIFICATE REQUEST");
+  });
+
+  it("posts the CSR and writes decoded DER, not base64", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "certs-"));
+    const savePath = join(dir, "nested", "devid.cer");
+    const fetchImpl = vi.fn(async () => jsonResponse(certResponse(true)));
+    const client = await connect(
+      { ...baseConfig, allowWrites: true },
+      fetchImpl as unknown as typeof fetch,
+    );
+
+    const text = textOf(
+      await client.callTool({
+        name: "app_store_connect_create_certificate",
+        arguments: {
+          certificateType: "DEVELOPER_ID_APPLICATION",
+          csrContent: "-----BEGIN CERTIFICATE REQUEST-----\nabc\n-----END CERTIFICATE REQUEST-----",
+          savePath,
+        },
+      }),
+    );
+
+    const post = postCall(fetchImpl, "/v1/certificates");
+    expect(post).toBeDefined();
+    const body = JSON.parse(String(post?.[1]?.body)) as {
+      data: { attributes: Record<string, string> };
+    };
+    expect(body.data.attributes.certificateType).toBe("DEVELOPER_ID_APPLICATION");
+    expect(body.data.attributes.csrContent).toContain("BEGIN CERTIFICATE REQUEST");
+
+    // Decoded, so the file is importable rather than a base64 text blob.
+    expect(await readFile(savePath)).toEqual(Buffer.from("hello"));
+    expect(text).toContain(savePath);
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it("refuses to revoke without an explicit confirm", async () => {
+    const fetchImpl = vi.fn(async () => jsonResponse({}));
+    const client = await connect(
+      { ...baseConfig, allowWrites: true },
+      fetchImpl as unknown as typeof fetch,
+    );
+    const result = await client.callTool({
+      name: "app_store_connect_revoke_certificate",
+      arguments: { certificateId: "cert-1" },
+    });
+    expect(result.isError).toBe(true);
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+});
