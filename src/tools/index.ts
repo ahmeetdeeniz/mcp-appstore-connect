@@ -6,9 +6,11 @@ import { registerAppEventTools } from "./appevents.js";
 import { registerAppInfoTools } from "./appinfos.js";
 import { registerAppTools } from "./apps.js";
 import { registerBuildTools } from "./builds.js";
+import { registerBuildUploadTools } from "./builduploads.js";
 import { registerBundleIdTools } from "./bundleids.js";
 import { registerCategoryTools } from "./categories.js";
 import { registerCertificateTools } from "./certificates.js";
+import { registerComplianceTools } from "./compliance.js";
 import { registerCustomerReviewTools } from "./customerreviews.js";
 import { registerCustomProductPageTools } from "./customproductpages.js";
 import { registerDeviceTools } from "./devices.js";
@@ -29,7 +31,9 @@ import { registerSubscriptionTools } from "./subscriptions.js";
 import { registerTestflightTools } from "./testflight.js";
 import { registerUserTools } from "./users.js";
 import { registerVersionTools } from "./versions.js";
+import { registerWebhookTools } from "./webhooks.js";
 import { registerWorkflowTools } from "./workflows.js";
+import { registerXcodeCloudTools } from "./xcodecloud.js";
 
 export type ToolContext = {
   /** Register the mutating tools too. Off by default — see APP_STORE_CONNECT_ALLOW_WRITES. */
@@ -58,6 +62,7 @@ export const registerTools = (
   registerReleaseDoctorTools(server, client);
   registerAppInfoTools(server, client, allowWrites);
   registerCategoryTools(server, client, allowWrites);
+  registerComplianceTools(server, client, allowWrites);
   registerPricingTools(server, client, allowWrites);
   registerReviewDetailTools(server, client, ctx);
   registerIapTools(server, client, allowWrites);
@@ -70,7 +75,10 @@ export const registerTools = (
   registerMarketingAssetTools(server, client, allowWrites);
   registerScreenshotTools(server, client, allowWrites);
   registerBuildTools(server, client, allowWrites);
+  registerBuildUploadTools(server, client, allowWrites);
   registerTestflightTools(server, client, allowWrites);
+  registerXcodeCloudTools(server, client, allowWrites);
+  registerWebhookTools(server, client, allowWrites);
   registerReportTools(server, client, ctx);
   registerCustomerReviewTools(server, client, allowWrites);
   registerUserTools(server, client, allowWrites);
