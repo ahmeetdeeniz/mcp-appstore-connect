@@ -15,6 +15,7 @@ import { registerDeviceTools } from "./devices.js";
 import { registerIapTools } from "./iap.js";
 import { registerListingTools } from "./listing.js";
 import { registerMarketingAssetTools } from "./marketingassets.js";
+import { registerOperatorTools } from "./operator.js";
 import { registerPricingTools } from "./pricing.js";
 import { registerRawTools } from "./raw.js";
 import { registerReleaseDoctorTools } from "./releasedoctor.js";
@@ -60,6 +61,7 @@ export const registerTools = (
   ctx: ToolContext,
 ): void => {
   const { allowWrites } = ctx;
+  registerOperatorTools(server, client);
   registerAppTools(server, client, allowWrites);
   registerVersionTools(server, client, allowWrites);
   registerSubmissionTools(server, client, allowWrites);
