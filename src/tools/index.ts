@@ -19,6 +19,7 @@ import { registerReportTools } from "./reports.js";
 import { registerReviewDetailTools } from "./reviewdetails.js";
 import { registerScreenshotTools } from "./screenshots.js";
 import { registerSubmissionTools } from "./submissions.js";
+import { registerSubscriptionTools } from "./subscriptions.js";
 import { registerTestflightTools } from "./testflight.js";
 import { registerUserTools } from "./users.js";
 import { registerVersionTools } from "./versions.js";
@@ -68,6 +69,7 @@ export const registerTools = (
   registerPricingTools(server, client, allowWrites);
   registerReviewDetailTools(server, client, ctx);
   registerIapTools(server, client, allowWrites);
+  registerSubscriptionTools(server, client, allowWrites);
   registerListingTools(server, client, ctx);
   registerScreenshotTools(server, client, allowWrites);
   registerBuildTools(server, client, allowWrites);
