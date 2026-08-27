@@ -115,6 +115,30 @@ const containsVersion = (itemsResponse: unknown, versionId: string): boolean => 
 };
 
 /**
+ * The id of the submission item carrying this version.
+ *
+ * Read off the item's own `appStoreVersion` relationship and nowhere else.
+ * `containsVersion` may fall back to a sideloaded resource to answer "is this
+ * version in here", which is enough to decide whether to resume a submission but
+ * NOT enough to delete one: that needs the single item's id, and picking by
+ * position when the relationship is absent would drop a different item — on a
+ * submission carrying a first in-app purchase, that is somebody else's review.
+ */
+const findVersionItemId = (itemsResponse: unknown, versionId: string): string | undefined => {
+  for (const item of resourcesOf(itemsResponse)) {
+    if (relatedId(item, "appStoreVersion") === versionId) return String(item.id);
+  }
+  return undefined;
+};
+
+/** A version found sitting on one of this app's own un-submitted drafts. */
+type StagedVersion = {
+  submissionId: string;
+  /** `undefined` when the version matched only by sideload, so no item is addressable. */
+  itemId: string | undefined;
+};
+
+/**
  * The app's own draft submission already holding this version, if there is one.
  *
  * ⚠️ Consulted *before* `assertSubmittable`, and that ordering is the entire point.
@@ -124,11 +148,11 @@ const containsVersion = (itemsResponse: unknown, versionId: string): boolean => 
  * started. The draft holding the version is the evidence that the half-done work is
  * the caller's own, which is what turns that lockout into a resume.
  */
-const findStagedDraft = async (
+const findStaged = async (
   client: AppStoreConnectClient,
   versionResponse: unknown,
   versionId: string,
-): Promise<string | undefined> => {
+): Promise<StagedVersion | undefined> => {
   const version = resourceOf(versionResponse);
   const attrs = attributesOf(version);
   if (attrs.appStoreState !== STAGED_VERSION_STATE) return undefined;
@@ -151,10 +175,19 @@ const findStagedDraft = async (
       include: "appStoreVersion",
       limit: 50,
     });
-    if (containsVersion(items, versionId)) return submissionId;
+    if (containsVersion(items, versionId)) {
+      return { submissionId, itemId: findVersionItemId(items, versionId) };
+    }
   }
   return undefined;
 };
+
+const findStagedDraft = async (
+  client: AppStoreConnectClient,
+  versionResponse: unknown,
+  versionId: string,
+): Promise<string | undefined> =>
+  (await findStaged(client, versionResponse, versionId))?.submissionId;
 
 /**
  * Read the version and report every reason it cannot be submitted at once. Apple
@@ -505,6 +538,81 @@ export const registerSubmissionTools = (
           reusedDraft,
           addedItem: !alreadyAdded,
           submission: summarizeResponse(submitted),
+        };
+      }),
+  );
+
+  server.registerTool(
+    "app_store_connect_remove_version_from_submission",
+    {
+      description:
+        "Take a version back off this app's un-submitted draft review submission, returning it " +
+        "to PREPARE_FOR_SUBMISSION so its build and metadata can be changed again. " +
+        "This is the counterpart to the staging that submit_version_for_review performs — every " +
+        "dryRun stages, because adding the item is how Apple adjudicates readiness. Staging " +
+        "also freezes the build: app_store_connect_set_version_build refuses a READY_FOR_REVIEW " +
+        "version, for attach and detach alike. And cancel_review_submission cannot undo it, " +
+        "because a draft has never been with Apple — Apple answers that 409 " +
+        "STATE_ERROR.ENTITY_STATE_INVALID, 'Resource is not in cancellable state'. Without this " +
+        "tool a preflight followed by 'rebuild it first' could only be unwound in the App Store " +
+        "Connect web UI. " +
+        "Drafts only: a submission already handed to Apple is refused and named, since " +
+        "withdrawing that one is cancel_review_submission's job.",
+      inputSchema: { versionId: versionIdArg, confirm: confirmArg },
+      annotations: { readOnlyHint: false, destructiveHint: true },
+    },
+    async ({ versionId }) =>
+      wrap(async () => {
+        // `app` must be included explicitly — Apple omits that relationship from a
+        // bare GET, and `findStaged` needs it to locate the app's drafts.
+        const versionResponse = await client.get(`/v1/appStoreVersions/${versionId}`, {
+          include: "app",
+        });
+        const attrs = attributesOf(resourceOf(versionResponse));
+        const staged = await findStaged(client, versionResponse, versionId);
+
+        if (staged === undefined) {
+          const state = attrs.appStoreState;
+          throw new PreconditionError(
+            state === STAGED_VERSION_STATE
+              ? `This version is ${STAGED_VERSION_STATE} but sits on no un-submitted draft for ` +
+                  `this app, which means the submission holding it has already gone to Apple. ` +
+                  `Withdraw that with app_store_connect_cancel_review_submission instead.`
+              : `This version is ${String(state)}, not staged on a draft submission, so there ` +
+                  `is nothing to remove — its build can already be changed with ` +
+                  `app_store_connect_set_version_build.`,
+            { appStoreState: state, versionString: attrs.versionString },
+          );
+        }
+
+        if (staged.itemId === undefined) {
+          throw new PreconditionError(
+            `Found the draft submission holding this version (${staged.submissionId}), but none ` +
+              `of its items carries an appStoreVersion relationship naming ${versionId}, so the ` +
+              `item to delete cannot be identified. Remove the version in App Store Connect ` +
+              `instead: deleting a guessed item could drop an in-app purchase out of review.`,
+            { submissionId: staged.submissionId, versionId },
+          );
+        }
+
+        await client.del(`/v1/reviewSubmissionItems/${staged.itemId}`);
+
+        // Report the state Apple actually left the version in rather than the one
+        // this tool intends: the whole point is to unblock set_version_build, and
+        // the caller needs to know whether it now will.
+        const after = attributesOf(
+          resourceOf(await client.get(`/v1/appStoreVersions/${versionId}`)),
+        );
+
+        return {
+          versionId,
+          submissionId: staged.submissionId,
+          removedItem: staged.itemId,
+          appStoreState: after.appStoreState,
+          note:
+            "Removed from the draft submission, which was never sent to Apple. The version is " +
+            "editable again — attach a different build with app_store_connect_set_version_build, " +
+            "then submit with app_store_connect_submit_version_for_review.",
         };
       }),
   );
