@@ -12,6 +12,7 @@ import { registerCertificateTools } from "./certificates.js";
 import { registerCustomerReviewTools } from "./customerreviews.js";
 import { registerCustomProductPageTools } from "./customproductpages.js";
 import { registerDeviceTools } from "./devices.js";
+import { registerExperimentTools } from "./experiments.js";
 import { registerIapTools } from "./iap.js";
 import { registerListingTools } from "./listing.js";
 import { registerMarketingAssetTools } from "./marketingassets.js";
@@ -28,6 +29,7 @@ import { registerSubscriptionTools } from "./subscriptions.js";
 import { registerTestflightTools } from "./testflight.js";
 import { registerUserTools } from "./users.js";
 import { registerVersionTools } from "./versions.js";
+import { registerWorkflowTools } from "./workflows.js";
 
 export type ToolContext = {
   /** Register the mutating tools too. Off by default — see APP_STORE_CONNECT_ALLOW_WRITES. */
@@ -36,25 +38,12 @@ export type ToolContext = {
   vendorNumber?: string | undefined;
   /** Which config layer supplied `vendorNumber`, reported by get_vendor_number. */
   vendorNumberSource?: "environment" | "file" | undefined;
-  /**
-   * Where this repo keeps its metadata tree, already normalized. Baked into the
-   * listing tool descriptions at registration time, which is the only channel
-   * that tells the caller where to write the files.
-   */
+  /** Where this repo keeps its metadata tree, already normalized. */
   metadataRoot: string;
-  /**
-   * The configured App Review contact, used by set_app_store_review_detail to
-   * fill contact fields the caller did not pass. Optional: with none configured
-   * the tool behaves exactly as it did before.
-   */
+  /** Configured App Review contact used to fill missing review-detail fields. */
   contact?: Contact | undefined;
 };
 
-/**
- * Register the App Store Connect tools. Read tools are always registered; write
- * tools are only registered when `allowWrites` is set, so with the flag off they
- * are not merely refused — they are invisible, and cannot be called at all.
- */
 export const registerTools = (
   server: McpServer,
   client: AppStoreConnectClient,
@@ -62,15 +51,12 @@ export const registerTools = (
 ): void => {
   const { allowWrites } = ctx;
   registerOperatorTools(server, client);
+  registerWorkflowTools(server, client);
   registerAppTools(server, client, allowWrites);
   registerVersionTools(server, client, allowWrites);
   registerSubmissionTools(server, client, allowWrites);
   registerReleaseDoctorTools(server, client);
   registerAppInfoTools(server, client, allowWrites);
-  // Gates a first submission trips over, none of them version-scoped: category,
-  // content rights (on registerAppTools), price, and the review contact. The
-  // fifth — App Privacy — has no public API at all and is deliberately absent;
-  // see the README before trying to add it back.
   registerCategoryTools(server, client, allowWrites);
   registerPricingTools(server, client, allowWrites);
   registerReviewDetailTools(server, client, ctx);
@@ -80,6 +66,7 @@ export const registerTools = (
   registerListingTools(server, client, ctx);
   registerCustomProductPageTools(server, client, allowWrites);
   registerAppEventTools(server, client, allowWrites);
+  registerExperimentTools(server, client, allowWrites);
   registerMarketingAssetTools(server, client, allowWrites);
   registerScreenshotTools(server, client, allowWrites);
   registerBuildTools(server, client, allowWrites);
