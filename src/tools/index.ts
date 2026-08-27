@@ -13,6 +13,8 @@ import { registerDeviceTools } from "./devices.js";
 import { registerIapTools } from "./iap.js";
 import { registerListingTools } from "./listing.js";
 import { registerPricingTools } from "./pricing.js";
+import { registerRawTools } from "./raw.js";
+import { registerReleaseDoctorTools } from "./releasedoctor.js";
 import { registerReportTools } from "./reports.js";
 import { registerReviewDetailTools } from "./reviewdetails.js";
 import { registerScreenshotTools } from "./screenshots.js";
@@ -56,6 +58,7 @@ export const registerTools = (
   registerAppTools(server, client, allowWrites);
   registerVersionTools(server, client, allowWrites);
   registerSubmissionTools(server, client, allowWrites);
+  registerReleaseDoctorTools(server, client);
   registerAppInfoTools(server, client, allowWrites);
   // Gates a first submission trips over, none of them version-scoped: category,
   // content rights (on registerAppTools), price, and the review contact. The
@@ -75,4 +78,5 @@ export const registerTools = (
   registerBundleIdTools(server, client, allowWrites);
   registerDeviceTools(server, client, allowWrites);
   registerCertificateTools(server, client, allowWrites);
+  registerRawTools(server, client, allowWrites);
 };
