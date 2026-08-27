@@ -14,6 +14,7 @@ import { registerCustomProductPageTools } from "./customproductpages.js";
 import { registerDeviceTools } from "./devices.js";
 import { registerIapTools } from "./iap.js";
 import { registerListingTools } from "./listing.js";
+import { registerMarketingAssetTools } from "./marketingassets.js";
 import { registerPricingTools } from "./pricing.js";
 import { registerRawTools } from "./raw.js";
 import { registerReleaseDoctorTools } from "./releasedoctor.js";
@@ -77,6 +78,7 @@ export const registerTools = (
   registerListingTools(server, client, ctx);
   registerCustomProductPageTools(server, client, allowWrites);
   registerAppEventTools(server, client, allowWrites);
+  registerMarketingAssetTools(server, client, allowWrites);
   registerScreenshotTools(server, client, allowWrites);
   registerBuildTools(server, client, allowWrites);
   registerTestflightTools(server, client, allowWrites);
