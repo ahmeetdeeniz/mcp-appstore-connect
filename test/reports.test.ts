@@ -78,4 +78,49 @@ describe("previewReport", () => {
     expect(result.dataRows).toBe(0);
     expect(result.truncated).toBe(false);
   });
+
+  it("says nothing about duplicates when there are none", () => {
+    // Absence of the field has to mean "checked, clean" — if it were present
+    // and zero it would read as noise, and if it were absent on a dirty file it
+    // would read as a clean bill of health.
+    const result = previewReport(`${header}\n${row(1)}\n${row(2)}\n`, 500);
+
+    expect(result.duplicateRows).toBeUndefined();
+    expect(result.duplicateNote).toBeUndefined();
+  });
+
+  it("counts data rows that repeat another row byte for byte", () => {
+    // The shape Apple's ONGOING monthly instances were caught in: every row of
+    // a month present twice, so every total doubles while the file stays
+    // perfectly well-formed. Nothing else in the response would show it.
+    const result = previewReport(`${header}\n${row(1)}\n${row(2)}\n${row(1)}\n${row(2)}\n`, 500);
+
+    expect(result.dataRows).toBe(4);
+    expect(result.duplicateRows).toBe(2);
+    expect(result.duplicateNote).toContain("inflated");
+  });
+
+  it("counts a row repeated more than twice once per extra copy", () => {
+    const result = previewReport(`${header}\n${row(1)}\n${row(1)}\n${row(1)}\n`, 500);
+
+    expect(result.duplicateRows).toBe(2);
+  });
+
+  it("does not count the header as a duplicate of an identical data row", () => {
+    // Contrived, but the guard is a one-character slice and getting it wrong
+    // would flag a clean single-row report.
+    const result = previewReport(`${header}\n${header}\n`, 500);
+
+    expect(result.dataRows).toBe(1);
+    expect(result.duplicateRows).toBeUndefined();
+  });
+
+  it("counts duplicates across the whole report, not just the inlined preview", () => {
+    // maxLines trims what is shown, never what is checked: a caller who sees
+    // `truncated` and saves the file still needs to know the file double-counts.
+    const result = previewReport(`${header}\n${row(1)}\n${row(2)}\n${row(1)}\n`, 2);
+
+    expect(result.truncated).toBe(true);
+    expect(result.duplicateRows).toBe(1);
+  });
 });
