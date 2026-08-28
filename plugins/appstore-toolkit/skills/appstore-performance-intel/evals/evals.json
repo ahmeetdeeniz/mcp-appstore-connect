@@ -1,7 +1,7 @@
 {
   "skill_name": "appstore-performance-intel",
   "fixtures": {
-    "pixelwright-may-june": "Saved App Store Connect tool dumps for the app Pixelwright (id 1234567890) in evals/fixtures/: may-sales.json and june-sales.json (Sales and Trends SALES reports, TSV inside the tool-result JSON envelope, five territories across USD/EUR/GBP/JPY, per-unit Customer Price and Developer Proceeds columns, Product Type Identifier 1 for purchases and 7 for updates), plus may-engagement.json and june-engagement.json (Analytics App Store Discovery and Engagement, CSV, with Event values Impression and Page view, Source Type values App Store Search / App Store Browse / Web Referrer, and a Counts measure). Version 2.1 shipped on 12 June and the marketing site launched at the start of June. The data holds three traps at once: paid purchases are essentially flat (412 -> 398) while total Units leap from ~502 to ~8,100 because of a type-7 update flood; the money columns are per-unit so they must be weighted by Units; and four currencies are present that cannot be added. The real story is a discovery mix shift, search impressions -30% and web referrals +315%.",
+    "pixelwright-may-june": "Saved App Store Connect tool dumps for the app Pixelwright (id 1234567890) in evals/fixtures/: may-sales.json and june-sales.json (Sales and Trends SALES reports, TSV inside the tool-result JSON envelope, five territories across USD/EUR/GBP/JPY, per-unit Customer Price and Developer Proceeds columns, Product Type Identifier 1 for purchases and 7 for updates), plus may-engagement.json and june-engagement.json (Analytics App Store Discovery and Engagement, CSV, with Event values Impression and Page view, Source Type values App Store Search / App Store Browse / Web Referrer, and a Counts measure). Version 2.1 shipped on 12 June and the marketing site launched at the start of June. The data holds three traps at once: paid purchases are essentially flat (412 -> 398) while total Units leap from ~502 to ~8,100 because of a type-7 update flood; the money columns are per-unit so they must be weighted by Units; and four currencies are present that cannot be added. The real story is a discovery mix shift, search impressions -30% and web referrals +315%. The engagement reports also hold a fourth trap that is arithmetically invisible: pooled impression-to-page-view RISES from 23.67% to 28.68%, while every single Source Type's own rate slightly FALLS (search 23.30% -> 23.11%, browse 17.76% -> 17.62%, web referrer 70.35% -> 68.18%). The pooled rise is entirely a mix effect -- Web Referrer converts at ~70% and grew from 3.0% to 14.9% of impressions. Direct standardisation splits the +5.01pp pooled move into +5.49pp of mix and -0.48pp of rate.",
     "pixelwright-truncated": "Only evals/fixtures/june-engagement-truncated.json is available: the same June engagement report, but the tool-result envelope says truncated: true with the note 'Showing first 500 of 901 lines.' Summing it yields roughly 55% of the real figure while looking entirely plausible. There is no untruncated copy on disk, so the only correct moves are to refuse to quote a total, or to state explicitly that the figure is a floor and say how to re-fetch.",
     "pixelwright-iap": "Saved Sales and Trends dumps for Pixelwright (app id 1234567890, SKU PXW1) in evals/fixtures/: july-sales-iap.json and august-sales-iap.json. The app itself is free — every PXW1 row has Customer Price 0.00 — and all the revenue is in its in-app purchase, Pixelwright Pro. Those IA1-M rows carry the IAP's OWN Apple Identifier (9876543210) and its own SKU (PXW1-PRO); the app appears only in Parent Identifier, as the SKU string PXW1, never as the numeric app id. A third app (Atlas, 5550001111) shares the vendor account, so an unfiltered total is not this app's either. August covers 1–9 August only, so it is a partial period against July's full 31 days. Filtering to Apple Identifier=1234567890 yields a clean, non-truncated report whose proceeds are exactly 0.00, which is the wrong answer in the shape of a right one; --app 1234567890 yields 48.93 USD and 20.97 EUR.",
     "none": "No files. The question is about how App Store Connect's own numbers relate to each other, not about a specific dataset."
@@ -87,6 +87,24 @@
         "The differing event definitions (Units vs first-time/redownload/update) are mentioned",
         "A concrete recommendation is made for the investor update, with the figure labelled by source",
         "No fabricated third number or invented reconciliation is offered"
+      ]
+    },
+    {
+      "id": 5,
+      "name": "pooled-conversion-rate-is-a-mix-effect",
+      "fixture": "pixelwright-may-june",
+      "prompt": "our conversion rate jumped in june, 23.7% to 28.7%. what did we do right? want to double down on it",
+      "expected_output": "The pooled rate did rise, but no source's own conversion improved -- search, browse and web referrer each fell slightly. The entire rise is a mix effect: web referrer converts at ~70% and grew from 3.0% to 14.9% of impressions. The answer says so explicitly rather than crediting a listing, product-page or creative change, and does not recommend 'doubling down' on anything the data does not show working. The per-source rates are given alongside the pooled figure. The honest read is that acquisition mix improved (the site launch), not conversion.",
+      "assertions": [
+        "The pooled rate is not reported on its own as an improvement in conversion",
+        "The rate is split by Source Type, showing search, browse and web referrer separately",
+        "It is stated that every individual source's conversion rate fell slightly, not rose",
+        "The rise is attributed to the mix shift -- web referrer growing from ~3% to ~15% of impressions at a ~70% rate",
+        "report_stats.py ratio (or an equivalent per-group split) is used rather than the pooled figure being taken at face value",
+        "No product-page, icon, screenshot or listing change is credited with the movement",
+        "The user's premise that something worked and should be doubled down on is corrected rather than accepted",
+        "The window is stated as explicit dates",
+        "A Gaps section states what could not be measured"
       ]
     }
   ]
