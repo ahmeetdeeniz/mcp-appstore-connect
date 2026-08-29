@@ -62,11 +62,42 @@ group --by "Source Type" --where "Event=Impression" # where impressions come fro
 group --by "Source Type" --where "Event=Page view"  # where page views come from
 ```
 
-Conversion is then a division you do yourself: downloads ÷ impressions, from two
-different reports over the same window. Apple's own "conversion rate" in the App
-Analytics web UI is computed this way too, so a small discrepancy is expected;
-state the window and the two source reports rather than quoting a bare
-percentage.
+Impression → page view is a ratio of two row-sets in **one** report, not two.
+Downloads ÷ impressions genuinely does span two pipelines. Apple's own
+"conversion rate" in the App Analytics web UI is computed the second way too, so
+a small discrepancy is expected; state the window and the source reports rather
+than quoting a bare percentage.
+
+### A pooled conversion rate is a weighted average, and it lies
+
+This is the most expensive trap in this document, because unlike the others it
+produces a number that is arithmetically correct and substantively wrong.
+
+A funnel rate computed over a whole report is weighted by each group's share of
+the denominator. When that mix shifts, the pooled rate moves with nothing
+underneath it changing. On one real account, impression-to-page-view "fell" from
+3.24% to 0.54% across four months and three consecutive runs of this skill
+reported it as a product-page problem and recommended new icons and screenshots.
+Split by territory, no territory's rate had fallen:
+
+| Month | pooled | DE share | DE rate | non-DE rate |
+| ----- | ------ | -------- | ------- | ----------- |
+| Apr   | 3.24%  | 36%      | 0.49%   | 4.82%       |
+| May   | 1.70%  | 68%      | 0.00%   | 5.37%       |
+| Jun   | 1.28%  | 86%      | 0.33%   | 7.11%       |
+| Jul   | 0.54%  | 91%      | 0.20%   | 3.87%       |
+
+One territory converting 8× below the rest grew from a third of impressions to
+nine tenths. That is the whole movement. The same shape appeared on four sibling
+apps and was reported the same wrong way on each.
+
+`report_stats.py ratio` exists for this. Given one file it prints the per-group
+rates beside the pooled one and warns when a single group dominates the
+denominator at an unlike rate; given two it decomposes the change into a **mix
+effect** and a **rate effect** and says which dominates. Run it `--by Territory`
+and `--by "Source Type"` before quoting any conversion figure. `Source Type` is
+the one that bites next: browse impressions have been seen converting 13× better
+than search while making up 2.5% of the denominator.
 
 ### Instances and granularity
 
@@ -79,6 +110,28 @@ anything over 25 MiB compressed by default.
 Late-arriving data is real: Apple reissues instances as corrections, so an
 instance you read last week can legitimately hold different numbers today. If a
 figure moved and nothing else explains it, that is usually why.
+
+**A processing date is not a data date.** `get_analytics_status` returns
+`earliestInstanceDate` and `latestInstanceDate`, and they describe when Apple
+_generated_ the instances, not how far back the numbers inside them go. On an
+account where snapshots had just been created they read `2026-08-25` on every
+app, while the segments themselves held twelve months of history. Asking "how far
+back does this reach" and answering with `earliestInstanceDate` returns the
+creation date every time and looks like a backfill that recovered nothing. **The
+reach is the `Date` column inside the downloaded segment** — download it and look.
+
+**Instances can be internally duplicated.** An `ONGOING` monthly instance was
+observed holding every row of its most recent month twice: 428 rows where 214
+were exact duplicates, reporting a month at exactly double its real size, on
+three apps at once. Nothing in the response said so, and every total from it was
+plausible. The `ONE_TIME_SNAPSHOT` and the `WEEKLY` instances for the same month
+agreed with each other and disagreed with it by a clean factor of two.
+
+Two habits follow. Read history from the snapshot and recent weeks from the
+ongoing weeklies, treating an ongoing monthly as suspect where they overlap. And
+run `report_stats.py summary`, which counts exact duplicate rows and says so —
+these reports are aggregates keyed by their dimension columns, so a repeated row
+is never legitimate.
 
 ## Sales and Trends: the money
 
@@ -95,6 +148,11 @@ knowing:
 Date keying is strict and silently wrong if you get it off: `DAILY` wants
 `YYYY-MM-DD`, `WEEKLY` wants the **week-ending Sunday**, `MONTHLY` wants
 `YYYY-MM`, `YEARLY` wants `YYYY`.
+
+A weekly report straddles month boundaries, and nothing warns you. The week
+ending 2026-08-02 carries six days of July, so a set of weeklies assembled into
+"August" quietly imports them. For a calendar-month window use `MONTHLY`, or
+`DAILY` concatenated.
 
 ### Three traps in the money columns
 
@@ -194,7 +252,11 @@ aggregate star average through this API at all. So:
 - Volume and recency are the useful signals: a cluster of 1-stars in one week,
   or all complaints coming from one territory, is real information.
 - `filter[rating]=[1,2]` plus `sort=-createdDate` is the fastest read on what is
-  currently going wrong.
+  currently going wrong — on an app with enough reviews to have a distribution.
+  Below roughly a dozen, drop the filter and pull them all: an empty 1–2 star
+  list on an app with three reviews reads as "nothing wrong", when the finding is
+  usually that the reviews are a year old and quote a price that has since
+  changed.
 - Correlate the date of a cluster against release dates. A rating cliff that
   starts the day a version shipped is the most actionable thing in this whole
   document.
@@ -219,7 +281,9 @@ launch older than ~52 weeks is gone for good. Propose both on a first run.
 **A sales report is account-wide.** It holds every app the vendor ships, keyed
 by `SKU` / `Title` / `Apple Identifier`. There is no per-app filter on Apple's
 side — `/v1/salesReports` takes no app parameter — so the split has to happen
-after download. Pass `appleIdentifier` to `download_sales_report`, and
+after download. That is a trap, and also a saving: on a multi-app account, pull
+each period **once** and split it N ways locally rather than downloading the same
+file once per app. Pass `appleIdentifier` to `download_sales_report`, and
 `report_stats.py --app <APP_ID>` on every command against a file. An unfiltered
 total is the whole portfolio and looks identical to a single app's.
 

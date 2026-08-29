@@ -9,5 +9,8 @@
   },
   "npm": {
     "publish": false
+  },
+  "hooks": {
+    "after:bump": "node scripts/sync-plugin-manifest.mjs && git add plugins/appstore-toolkit/.claude-plugin/plugin.json"
   }
 }

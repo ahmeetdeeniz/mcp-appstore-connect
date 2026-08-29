@@ -236,6 +236,8 @@ A **free** app still needs a price: "free" is a price point, not the absence of 
 >
 > The cost is that staging moves the version from `PREPARE_FOR_SUBMISSION` to `READY_FOR_REVIEW`, which is not a submittable state. `submit_version_for_review` therefore **resumes**: when a version is already sitting on this app's own un-submitted draft, it skips creating and adding and goes straight to submitting, reporting `resumedDraft: true`. Without that, the tool's own preflight locked it out of finishing — the draft sat with `submittedDate: null` and nothing in this server could send it, because no tool submits a submission by id.
 >
+> Resuming is only half of it, because the other thing `READY_FOR_REVIEW` freezes is the **build**. `set_version_build` refuses that state for attach and detach alike, so "preflight, then decide to rebuild first" had no way forward: `cancel_review_submission` cannot help either, since a draft has never been with Apple and Apple answers the PATCH `409 STATE_ERROR.ENTITY_STATE_INVALID`, _"Resource is not in cancellable state"_. **`remove_version_from_submission`** is the way back out — it `DELETE`s the draft's `reviewSubmissionItem` for that version, which drops it to `PREPARE_FOR_SUBMISSION` and unblocks `set_version_build`. It touches drafts only; a submission already with Apple is refused and redirected to `cancel_review_submission`.
+>
 > On the rejection branch a dry run writes **nothing at all** — no item is resolved and nothing goes back to Apple — since staging buys no diagnostic there and the next PATCH is the irreversible one.
 
 > **After a rejection, resubmit the same submission — never cancel it.** Apple hands a rejected submission back as `UNRESOLVED_ISSUES`, which reads like a state that is still with Apple and is not: it is yours to edit again. `submit_version_for_review` detects it, `PATCH`es each `REJECTED` item with `{"resolved": true}` (the web UI's **Update review**), then `PATCH`es the submission with `{"submitted": true}` (**Resubmit to App Review**). The submission keeps its queue position, and every item that was _not_ rejected goes back untouched — which matters most for a first non-consumable IAP riding inside it, since that one is often already `IN_REVIEW` while the version was being rejected.
@@ -253,7 +255,7 @@ A **free** app still needs a price: "free" is a price point, not the absence of 
 
 **Versions & metadata** — `list_versions`, `get_version` (resolves the attached build — which binary the version would actually ship, and when it was uploaded), `list_version_localizations`, `get_version_localization`, _`create_version`_\*, _`update_version`_\* (release type — auto on approval, manual, or scheduled), _`update_version_localization`_\* (description, keywords, what's-new, promo text)
 
-**Review submissions** — `list_review_submissions`, _`submit_version_for_review`_\*†, _`cancel_review_submission`_\*† — hand a finished version to Apple for review, or withdraw it
+**Review submissions** — `list_review_submissions`, _`submit_version_for_review`_\*†, _`cancel_review_submission`_\*†, _`remove_version_from_submission`_\*† — hand a finished version to Apple for review, withdraw one already with Apple, or take a version back off an un-submitted draft so its build can be changed again
 
 **Release** — _`release_version`_\*† — release an approved version sitting in `PENDING_DEVELOPER_RELEASE` (the manual "Release This Version" button)
 

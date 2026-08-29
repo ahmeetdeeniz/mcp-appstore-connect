@@ -132,6 +132,15 @@ forward, so a launch older than ~52 weeks is gone for good.
 Both are writes against the user's account. Confirm before creating either, and
 name what each buys.
 
+**When the snapshot and the ongoing request overlap, the snapshot wins.** They
+cover the same months once both exist, and they do not always agree. An `ONGOING`
+**monthly** instance has been observed holding every row of its most recent month
+**twice** — reporting 7,764 impressions where the snapshot held 3,882, on three
+apps at once, with nothing in the response saying so. `summary` now flags exact
+duplicate rows, but the habit that catches it is to read history from the
+snapshot, read recent weeks from the ongoing **weekly** instances, and treat an
+ongoing monthly as suspect until it agrees with one of them.
+
 Ratings are cheap and often the most actionable thing in the run:
 
 ```
@@ -188,6 +197,7 @@ python3 ${CLAUDE_SKILL_DIR}/scripts/report_stats.py summary <file>...
 python3 ${CLAUDE_SKILL_DIR}/scripts/report_stats.py group   <file> --by "Source Type" --where "Event=Impression"
 python3 ${CLAUDE_SKILL_DIR}/scripts/report_stats.py money   <file> --by "Product Type Identifier"
 python3 ${CLAUDE_SKILL_DIR}/scripts/report_stats.py rate    <previous> <current> --days <days so far>
+python3 ${CLAUDE_SKILL_DIR}/scripts/report_stats.py ratio   <file> --numerator "Event=Page view" --denominator "Event=Impression" --by Territory
 python3 ${CLAUDE_SKILL_DIR}/scripts/report_stats.py compare <previous> <current> --by Territory
 ```
 
@@ -225,15 +235,44 @@ deliberate: re-fetch with a higher `maxLines` or a narrower window. Passing
 `--allow-truncated` to get past it turns every total in your report into a
 floor, and nothing downstream will remind you.
 
+It also warns when a file contains **exact duplicate rows**. Apple's reports are
+aggregates keyed by their dimension columns, so a repeated row means the file
+double-counts, and the total is wrong by exactly that much while looking
+perfectly well-formed — truncation's mirror image. Do not quote a figure from a
+file that warns; cross-check it against another instance first.
+
 It also encodes three things that are easy to get wrong by hand and that the
 `money` command handles for you: per-unit money columns get weighted by units,
 currencies are never combined, and free updates are separated from purchases.
 Trust its labels over your own mental arithmetic.
 
 **The funnel lives in rows, not columns.** There is no impressions column;
-`Impression` and `Page view` are values of `Event`, both measured in `Counts`.
-Conversion is a division you do across two reports over the same window — state
-both sources when you quote it.
+`Impression` and `Page view` are values of `Event` in the _same_ report, both
+measured in `Counts`. So impression-to-page-view is a ratio of two row-sets in
+one file — that is what `ratio` is for. Downloads-over-impressions genuinely does
+span two pipelines, and when you quote it you name both reports and the window.
+
+**Never quote a pooled conversion rate. Split it first.** A funnel rate is a
+weighted average across territories and sources, and a weighted average moves
+when the weights move, with nothing underneath it changing. This is the single
+most expensive mistake this skill has made: three consecutive runs reported
+impression-to-page-view "falling" from 3.24% to 0.54% and recommended redoing
+the icon and screenshots. No territory's rate had fallen at all — one territory
+converting at 0.24% had grown from 36% to 91% of impressions. The
+recommendation came entirely out of the arithmetic of the mix.
+
+```bash
+report_stats.py ratio <file> --numerator "Event=Page view" \
+                             --denominator "Event=Impression" --by Territory
+report_stats.py ratio <previous> <current> --numerator "Event=Page view" \
+                             --denominator "Event=Impression" --by "Source Type"
+```
+
+With one file it prints the rate per group beside the pooled one and warns when
+one group dominates the denominator at an unlike rate. With two it splits the
+change into a **mix effect** and a **rate effect** by direct standardisation, and
+says outright when the pooled move is mostly mix. Run it `--by Territory` and
+again `--by "Source Type"` before writing a word about conversion.
 
 **Normalise per day before comparing two periods.** Months are 27–31 days and the
 period you are reporting on is usually still in progress, so raw totals are not
@@ -259,6 +298,11 @@ cause:
 report_stats.py rate <previous> <current> --app <APP_ID> --days <days so far>
 ```
 
+A period with **no rows at all** is the commonest interesting case — "nothing
+for 27 days, is that real?" — and it is a real zero, not an error. Pass `--days`
+and `rate` will test it against the base rate; without `--days` there are no
+dates in the file to measure the window by, so it asks for one.
+
 Under ~5% treat the movement as real and explain it. Over ~20% say the period
 was quiet and that the change is within normal variation, and do not attach a
 cause to it — an invented explanation for noise is worse than no explanation,
@@ -272,8 +316,13 @@ stopping when one holds:
 1. **A release.** Line the change up against version dates from step 1.
 2. **A source shift.** `group --by "Source Type"` on both periods. Search
    falling while referral rises is a different story from everything falling.
-3. **A territory.** One market moving can carry a global total; `compare --by
-Territory` shows it in one line.
+3. **A territory — as volume, and as mix.** Two different things live here and
+   only the first is obvious. _Volume:_ one market moving can carry a global
+   total, and `compare --by Territory` shows it in one line. _Mix:_ if the metric
+   that moved is a **rate**, run `ratio --by Territory` across both periods
+   before attributing it to anything. A pooled rate falls when a low-converting
+   territory grows its share, with every territory's own rate flat. That is not
+   a conversion problem and no listing change addresses it.
 4. **A composition change.** Did units rise because of updates rather than
    purchases? Did a price change move proceeds without moving units?
 5. **Apple's own reporting.** Late-arriving corrections, an empty date, a

@@ -71,8 +71,20 @@ const postCall = (
       String(call[0]).includes(path) && (call[1] as RequestInit | undefined)?.method === "POST",
   ) as [string, RequestInit] | undefined;
 
+const deleteCall = (fetchImpl: ReturnType<typeof vi.fn>): [string, RequestInit] | undefined =>
+  fetchImpl.mock.calls.find((call) => (call[1] as RequestInit | undefined)?.method === "DELETE") as
+    | [string, RequestInit]
+    | undefined;
+
 const textOf = (result: Awaited<ReturnType<Client["callTool"]>>): string =>
   (result.content as { text: string }[])[0]?.text ?? "";
+
+/** One draft submission item, linked to a version by relationship. */
+const submissionItemFor = (versionId: string): unknown => ({
+  id: "item-1",
+  type: "reviewSubmissionItems",
+  relationships: { appStoreVersion: { data: { id: versionId, type: "appStoreVersions" } } },
+});
 
 /** A one-segment `/segments` listing, with the attributes the test cares about. */
 const segmentsBody = (attributes: Record<string, unknown>): unknown => ({
@@ -144,6 +156,7 @@ describe("tool registration", () => {
       "app_store_connect_release_version",
       "app_store_connect_submit_version_for_review",
       "app_store_connect_cancel_review_submission",
+      "app_store_connect_remove_version_from_submission",
       "app_store_connect_update_app_info_localization",
       "app_store_connect_update_age_rating_declaration",
       "app_store_connect_apply_listing",
@@ -1387,6 +1400,183 @@ describe("submit_version_for_review", () => {
     expect((result.content as { text: string }[])[0]?.text ?? "").toContain(expected);
     expect(patchCall(fetchImpl)).toBeUndefined();
     expect(postCall(fetchImpl, "/v1/reviewSubmissionItems")).toBeUndefined();
+  });
+});
+
+/**
+ * The other half of the staging trap. `submit_version_for_review` learned to
+ * *resume* a draft its own dryRun staged; this is how a caller backs out of one
+ * instead, which is the only route to changing the build afterwards:
+ *
+ *   - `set_version_build` refuses a READY_FOR_REVIEW version, attach and detach alike
+ *   - `cancel_review_submission` 409s on a draft — it was never with Apple
+ *
+ * Before this tool those two dead ends left the web UI as the only way out.
+ */
+describe("remove_version_from_submission", () => {
+  const VERSION_ID = "01f7fc5e-fef8-49ec-b749-7849cdde3e51";
+  const APP_ID = "6753819990";
+  const SUBMISSION_ID = "sub-1";
+
+  const versionBody = (attrs: Record<string, unknown> = {}, withApp = true): unknown => ({
+    data: {
+      id: VERSION_ID,
+      type: "appStoreVersions",
+      attributes: {
+        platform: "MAC_OS",
+        versionString: "1.2.1",
+        appStoreState: "READY_FOR_REVIEW",
+        ...attrs,
+      },
+      relationships: withApp ? { app: { data: { id: APP_ID, type: "apps" } } } : {},
+    },
+  });
+
+  const draft = {
+    id: SUBMISSION_ID,
+    type: "reviewSubmissions",
+    attributes: { platform: "MAC_OS", state: "READY_FOR_REVIEW" },
+  };
+
+  type Routes = {
+    version?: unknown;
+    /** Successive `/appStoreVersions/` reads: staged first, then post-delete. */
+    versionAfter?: unknown;
+    drafts?: unknown[];
+    items?: unknown[];
+    /** Report the version only in `included`, never on an item relationship. */
+    sideloadVersion?: boolean;
+  };
+
+  const routed = (routes: Routes = {}): ReturnType<typeof vi.fn> => {
+    let versionReads = 0;
+    return vi.fn(async (url: string, init?: RequestInit) => {
+      const parsed = new URL(url);
+      const method = init?.method ?? "GET";
+
+      if (parsed.pathname.includes("/reviewSubmissionItems/") && method === "DELETE") {
+        return jsonResponse({});
+      }
+      if (parsed.pathname.includes("/reviewSubmissions") && parsed.pathname.includes("/items")) {
+        return jsonResponse({
+          data: routes.items ?? [submissionItemFor(VERSION_ID)],
+          ...(routes.sideloadVersion === true
+            ? { included: [{ id: VERSION_ID, type: "appStoreVersions" }] }
+            : {}),
+        });
+      }
+      if (parsed.pathname.endsWith("/reviewSubmissions")) {
+        return jsonResponse({ data: routes.drafts ?? [draft] });
+      }
+      if (parsed.pathname.includes("/appStoreVersions/")) {
+        versionReads += 1;
+        if (versionReads > 1 && routes.versionAfter !== undefined) {
+          return jsonResponse(routes.versionAfter);
+        }
+        return jsonResponse(routes.version ?? versionBody());
+      }
+      return jsonResponse({ data: [] });
+    });
+  };
+
+  const callTool = async (
+    args: Record<string, unknown>,
+    fetchImpl: ReturnType<typeof vi.fn>,
+  ): ReturnType<Client["callTool"]> => {
+    const client = await connect(
+      { ...baseConfig, allowWrites: true },
+      fetchImpl as unknown as typeof fetch,
+    );
+    return client.callTool({
+      name: "app_store_connect_remove_version_from_submission",
+      arguments: args,
+    });
+  };
+
+  it("deletes the staged item and reports the version editable again", async () => {
+    const fetchImpl = routed({
+      versionAfter: versionBody({ appStoreState: "PREPARE_FOR_SUBMISSION" }),
+    });
+
+    const result = await callTool({ versionId: VERSION_ID, confirm: true }, fetchImpl);
+
+    expect(result.isError).toBeFalsy();
+    expect(deleteCall(fetchImpl)?.[0]).toContain("/v1/reviewSubmissionItems/item-1");
+
+    const body = JSON.parse(textOf(result));
+    expect(body.removedItem).toBe("item-1");
+    expect(body.submissionId).toBe(SUBMISSION_ID);
+    // The point of the whole tool: set_version_build will now be accepted.
+    expect(body.appStoreState).toBe("PREPARE_FOR_SUBMISSION");
+  });
+
+  // Same reason submit_version_for_review has to ask: Apple omits `app` from a
+  // bare GET, and without it the app's drafts cannot be listed at all.
+  it("asks Apple to include the app relationship", async () => {
+    const fetchImpl = routed();
+
+    await callTool({ versionId: VERSION_ID, confirm: true }, fetchImpl);
+
+    const versionCall = fetchImpl.mock.calls.find((call) =>
+      String(call[0]).includes("/v1/appStoreVersions/"),
+    );
+    const include = new URL(String(versionCall?.[0])).searchParams.get("include") ?? "";
+    expect(include.split(",")).toContain("app");
+  });
+
+  it("refuses a version that is not staged, and names the state", async () => {
+    const fetchImpl = routed({ version: versionBody({ appStoreState: "PREPARE_FOR_SUBMISSION" }) });
+
+    const result = await callTool({ versionId: VERSION_ID, confirm: true }, fetchImpl);
+
+    expect(result.isError).toBe(true);
+    expect(textOf(result)).toContain("PREPARE_FOR_SUBMISSION");
+    expect(deleteCall(fetchImpl)).toBeUndefined();
+  });
+
+  /**
+   * Staged, but the draft holding it is gone — the submission went to Apple. The
+   * fix is a withdrawal, not a delete, and saying so is the difference between a
+   * one-line redirect and a hunt through the API docs.
+   */
+  it("points at cancel_review_submission when no draft holds the version", async () => {
+    const fetchImpl = routed({ drafts: [] });
+
+    const result = await callTool({ versionId: VERSION_ID, confirm: true }, fetchImpl);
+
+    expect(result.isError).toBe(true);
+    expect(textOf(result)).toContain("app_store_connect_cancel_review_submission");
+    expect(deleteCall(fetchImpl)).toBeUndefined();
+  });
+
+  /**
+   * The version is provably on the draft — but only as a sideloaded resource, so
+   * no item id can be tied to it. Deleting the single item present would look
+   * right and could drop a first in-app purchase out of review, so refuse.
+   */
+  it("refuses rather than guessing when no item names the version", async () => {
+    // The version is provably present, but only in `included` — the sideload path
+    // `containsVersion` accepts. The one item on the draft names a different
+    // version, so there is nothing safe to delete.
+    const fetchImpl = routed({
+      items: [submissionItemFor("some-other-version")],
+      sideloadVersion: true,
+    });
+
+    const result = await callTool({ versionId: VERSION_ID, confirm: true }, fetchImpl);
+
+    expect(result.isError).toBe(true);
+    expect(textOf(result)).toContain("cannot be identified");
+    expect(deleteCall(fetchImpl)).toBeUndefined();
+  });
+
+  it("refuses without an explicit confirm", async () => {
+    const fetchImpl = routed();
+
+    const result = await callTool({ versionId: VERSION_ID }, fetchImpl);
+
+    expect(result.isError).toBe(true);
+    expect(fetchImpl).not.toHaveBeenCalled();
   });
 });
 

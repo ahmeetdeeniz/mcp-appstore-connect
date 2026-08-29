@@ -39,6 +39,8 @@ Usage:
     python3 report_stats.py group   FILE --by COL[,COL] [--metric COL] [--top N] [--app ID]
     python3 report_stats.py money   FILE [--by COL] [--top N] [--app ID]
     python3 report_stats.py rate    FILE [FILE ...] [--metric COL] [--days N] [--app ID]
+    python3 report_stats.py ratio   FILE [CURRENT] --numerator COL=VAL --denominator COL=VAL
+                                    [--by COL] [--top N] [--app ID]
     python3 report_stats.py compare BASE CURRENT --by COL [--metric COL] [--top N] [--app ID]
 
 `rate` is the one to reach for before explaining any movement: it normalises
@@ -46,6 +48,21 @@ each period to a per-day rate (months are 27-31 days and the current one is
 always partial) and gives the Poisson probability that the change between two
 periods is noise. At App Store volumes a percentage does not answer that --
 7 -> 2 units and 700 -> 200 are both -71%, and only one is evidence.
+
+`ratio` is the one to reach for before quoting any conversion rate. A funnel
+rate is a ratio of two row-sets, and the pooled figure is a weighted average
+that moves when the weights move, with nothing underneath it changing. Three
+consecutive runs of this skill reported impression-to-page-view "falling" from
+3.24% to 0.54% and recommended redoing the icon and screenshots; no territory's
+rate had fallen at all, one 0.24%-converting territory had simply grown from
+36% to 91% of impressions. `ratio` prints the per-group rates beside the pooled
+one, and with two files it splits the change into a mix effect and a rate
+effect so that artifact cannot be published again.
+
+Duplicated rows are caught too. Apple's reports are aggregates keyed by their
+dimension columns, so a row appearing twice means the file double-counts; an
+ONGOING monthly analytics instance was observed holding a whole month twice.
+Every command says so rather than quietly totalling it.
 
 This script never makes network calls. Fetch the reports with the
 appstore-connect MCP and save what it returns.
@@ -306,10 +323,52 @@ def guard_truncation(path, truncated, note, allowed):
     print("!! %s\n" % message)
 
 
+def duplicate_note(rows):
+    """How many rows are byte-identical to another row, if any.
+
+    Apple's reports are aggregates keyed by their dimension columns, so the same
+    (Date, Event, Source Type, Territory, ...) tuple should appear once. A file
+    where it appears twice has been double-counted, and every total from it is
+    exactly wrong by that much while looking entirely well-formed -- the same
+    failure shape as truncation, in the opposite direction.
+
+    This is not hypothetical. An ONGOING monthly analytics instance was observed
+    holding every row of its most recent month twice, reporting 7,764 impressions
+    where the ONE_TIME_SNAPSHOT for the same month held 3,882. Nothing in the
+    response said so; it was only caught by pulling a second instance and
+    noticing the factor of two.
+
+    Returns a warning string, or None when the file is clean.
+    """
+    seen = {}
+    for row in rows:
+        key = tuple(str(v) for v in row.values())
+        seen[key] = seen.get(key, 0) + 1
+    repeated = {k: n for k, n in seen.items() if n > 1}
+    if not repeated:
+        return None
+    extra = sum(n - 1 for n in repeated.values())
+    return (
+        "%d of %d rows are exact duplicates of another row (%d distinct rows "
+        "repeated). Every total from this file is inflated by those rows. Apple's "
+        "ONGOING monthly analytics instances have been seen doubling a whole "
+        "month this way -- cross-check the figure against the ONE_TIME_SNAPSHOT "
+        "or a WEEKLY instance before quoting it."
+        % (extra, len(rows), len(repeated))
+    )
+
+
+def warn_duplicates(path, rows):
+    note = duplicate_note(rows)
+    if note:
+        print("!! %s: %s\n" % (path, note))
+
+
 def cmd_summary(args):
     for path in args.files:
         rows, columns, truncated, note = read_report(path)
         guard_truncation(path, truncated, note, args.allow_truncated)
+        warn_duplicates(path, rows)
         rows, filter_lines = apply_filters(rows, args, columns)
         print("== %s" % path)
         for line in filter_lines:
@@ -461,6 +520,7 @@ def apply_filters(rows, args, columns):
 def cmd_group(args):
     rows, columns, truncated, note = read_report(args.file)
     guard_truncation(args.file, truncated, note, args.allow_truncated)
+    warn_duplicates(args.file, rows)
     rows, filter_lines = apply_filters(rows, args, columns)
     if not rows:
         raise ReportError("No rows left after the filter. Check the value spelling.")
@@ -510,6 +570,7 @@ def cmd_money(args):
     """
     rows, columns, truncated, note = read_report(args.file)
     guard_truncation(args.file, truncated, note, args.allow_truncated)
+    warn_duplicates(args.file, rows)
     rows, money_filter_lines = apply_filters(rows, args, columns)
     if not rows:
         raise ReportError("No rows left after the filter. Check the value spelling.")
@@ -716,9 +777,33 @@ def cmd_rate(args):
     for path in args.files:
         rows, columns, truncated, note = read_report(path)
         guard_truncation(path, truncated, note, args.allow_truncated)
+        warn_duplicates(path, rows)
         rows, filter_lines = apply_filters(rows, args, columns)
-        if not rows:
-            raise ReportError("No rows left after the filter in %s." % path)
+
+        # A period with nothing in it is the single most interesting case this
+        # command has -- "no downloads for 27 days, is that real?" is a zero-run,
+        # and refusing it forced two real runs of this skill to work the Poisson
+        # tail out by hand. It is allowed for the LAST file only, and only with
+        # --days, because a period with no rows has no dates to measure itself
+        # by. An empty BASE period stays an error: a zero base rate gives nothing
+        # to compare against.
+        empty = not rows
+        if empty:
+            if path != args.files[-1]:
+                raise ReportError(
+                    "No rows left after the filter in %s, and it is not the last "
+                    "file. A period with no activity cannot serve as the baseline "
+                    "-- there is no rate to compare against. Check the spelling, "
+                    "or pick a base period that has data." % path
+                )
+            if not args.days:
+                raise ReportError(
+                    "No rows left after the filter in %s. If that is a real zero "
+                    "-- no units in the whole period -- pass --days N to say how "
+                    "long the period was, and the zero will be tested against the "
+                    "base rate. Without it there are no dates to measure the "
+                    "window by. If it is not a real zero, check the spelling." % path
+                )
 
         metric = args.metric or (UNITS if UNITS in columns else pick_metric(rows, columns, None))
         if metric not in columns:
@@ -739,7 +824,7 @@ def cmd_rate(args):
             )
 
         total = sum(to_number(r.get(metric)) or 0.0 for r in rows)
-        first, last, days = window(rows)
+        first, last, days = window(rows) if rows else (None, None, 0)
         # --days applies to the LAST file only. It exists for a period still in
         # progress, and that is always the newest one; applying it to the base
         # too would rescale the very rate being compared against and quietly
@@ -761,6 +846,7 @@ def cmd_rate(args):
                 "first": first,
                 "last": last,
                 "overridden": overridden,
+                "empty": empty,
                 "filters": filter_lines,
             }
         )
@@ -772,11 +858,16 @@ def cmd_rate(args):
         # The report's own dates span the whole month even when only part of it
         # has happened, so an overridden count has to say it overrode them --
         # otherwise the line reads as a 31-day window measured over 9 days.
-        suffix = " days, from --days -- period still in progress)" if period["overridden"] else " days)"
+        note = " (from --days -- period still in progress)" if period["overridden"] else ""
         if period["first"]:
-            print("   window: %s .. %s  (%d%s" % (period["first"], period["last"], period["days"], suffix))
+            print(
+                "   window: %s .. %s  (%d days)%s"
+                % (period["first"], period["last"], period["days"], note)
+            )
         else:
-            print("   window: %d%s" % (period["days"], suffix))
+            print("   window: %d days%s" % (period["days"], note))
+        if period["empty"]:
+            print("   no rows matched -- treating this period as a real zero over %d days" % period["days"])
         rate = period["total"] / period["days"]
         print(
             "   %s: %s   ->  %.3f/day   %.1f/30d"
@@ -815,6 +906,235 @@ def cmd_rate(args):
             )
             print("   -> %s" % words)
         print()
+    return 0
+
+
+def _ratio_sides(rows, columns, numerator, denominator, metric):
+    """Sum `metric` over the numerator rows and the denominator rows separately."""
+    num_rows = apply_where(rows, numerator, columns)
+    den_rows = apply_where(rows, denominator, columns)
+    total = lambda rs: sum(to_number(r.get(metric)) or 0.0 for r in rs)
+    return num_rows, den_rows, total(num_rows), total(den_rows)
+
+
+def _grouped(rows, by, metric):
+    out = {}
+    for row in rows:
+        key = tuple(str(row.get(c, "")).strip() for c in by)
+        out[key] = out.get(key, 0.0) + (to_number(row.get(metric)) or 0.0)
+    return out
+
+
+def _pct(part, whole):
+    return ("%.2f%%" % (100.0 * part / whole)) if whole else "--"
+
+
+def cmd_ratio(args):
+    """A conversion rate, split by the dimension that decides whether it means anything.
+
+    A funnel rate -- page views over impressions, installs over page views -- is
+    a ratio of two row-sets in the same report, and the number people quote is
+    the pooled one. That pooled number is a weighted average, and a weighted
+    average moves when the weights move, with nothing underneath it changing.
+
+    That is not a theoretical worry. Three consecutive runs of this skill
+    reported that impression-to-page-view had fallen from 3.24% to 0.54% and
+    concluded the product page was the problem. It had not fallen anywhere: one
+    territory that converts at 0.24% had grown from 36% to 91% of impressions
+    while every territory's own rate held flat. The recommendation that came out
+    of it -- redo the icon and the screenshots -- was drawn entirely from the
+    arithmetic of the mix.
+
+    So this command never prints the pooled rate on its own. It prints the rate
+    per group beside it, and with two files it decomposes the change into the
+    part that came from the mix and the part that came from the rates.
+    """
+    files = args.files
+    if len(files) > 2:
+        raise ReportError("ratio takes one file, or two to compare (base first).")
+
+    periods = []
+    for path in files:
+        rows, columns, truncated, note = read_report(path)
+        guard_truncation(path, truncated, note, args.allow_truncated)
+        warn_duplicates(path, rows)
+        rows, filter_lines = apply_filters(rows, args, columns)
+        if not rows:
+            raise ReportError("No rows left after the filter in %s." % path)
+        metric = pick_metric(rows, columns, args.metric)
+        by = [c.strip() for c in args.by.split(",")] if args.by else []
+        for col in by:
+            if col not in columns:
+                raise ReportError("No column %r. Available: %s" % (col, ", ".join(columns)))
+        num_rows, den_rows, num, den = _ratio_sides(
+            rows, columns, args.numerator, args.denominator, metric
+        )
+        if not den:
+            raise ReportError(
+                "The denominator (%s) sums to zero in %s, so there is no rate to "
+                "compute." % (" ".join(args.denominator), path)
+            )
+        periods.append(
+            {
+                "path": path,
+                "metric": metric,
+                "by": by,
+                "num": num,
+                "den": den,
+                "num_by": _grouped(num_rows, by, metric),
+                "den_by": _grouped(den_rows, by, metric),
+                "filters": filter_lines,
+                "span": date_span(rows),
+            }
+        )
+
+    by = periods[0]["by"]
+    metric = periods[0]["metric"]
+    label = "%s / %s" % (" ".join(args.numerator), " ".join(args.denominator))
+
+    for period in periods:
+        print("== %s" % period["path"])
+        for line in period["filters"]:
+            print("   %s" % line)
+        col, first, last = period["span"]
+        if col:
+            print("   %s: %s .. %s" % (col, first, last))
+        print(
+            "   %s  =  %s / %s  =  %s   (measure: %s)"
+            % (label, fmt(period["num"]), fmt(period["den"]), _pct(period["num"], period["den"]), metric)
+        )
+        print()
+
+    if not by:
+        print(
+            "NOTE: no --by given, so this is the pooled rate and nothing else.\n"
+            "      A pooled funnel rate is a weighted average across territories\n"
+            "      and sources; re-run with --by Territory before quoting it."
+        )
+        return 0
+
+    if len(periods) == 1:
+        period = periods[0]
+        keys = sorted(period["den_by"], key=lambda k: -period["den_by"][k])
+        shown = keys[: args.top] if args.top else keys
+        pairs = []
+        for key in shown:
+            d = period["den_by"][key]
+            n = period["num_by"].get(key, 0.0)
+            pairs.append(list(key) + [fmt(n), fmt(d), _pct(d, period["den"]), _pct(n, d)])
+        print(render_table(pairs, by + ["numerator", "denominator", "share of denom", "rate"]))
+        if args.top and len(keys) > args.top:
+            print("\n(%d more groups not shown)" % (len(keys) - args.top))
+        print()
+        print("   pooled: %s" % _pct(period["num"], period["den"]))
+
+        # The concentration warning. One group holding most of the denominator at
+        # a rate unlike everyone else's is the setup for every mix artifact, and
+        # it is invisible in the pooled figure by construction.
+        top_key = keys[0]
+        top_den = period["den_by"][top_key]
+        top_num = period["num_by"].get(top_key, 0.0)
+        rest_den = period["den"] - top_den
+        rest_num = period["num"] - top_num
+        share = top_den / period["den"]
+        if share >= 0.4 and rest_den and top_den:
+            top_rate = top_num / top_den
+            rest_rate = rest_num / rest_den
+            if top_rate and rest_rate:
+                factor = max(top_rate, rest_rate) / min(top_rate, rest_rate)
+            else:
+                factor = float("inf")
+            if factor >= 2.0:
+                print()
+                print(
+                    "!! %s = %s holds %.0f%% of the denominator and converts at %s,\n"
+                    "   against %s for everything else -- a factor of %s.\n"
+                    "   The pooled rate is therefore mostly a statement about that one\n"
+                    "   group. It will move whenever that group's share moves, with\n"
+                    "   nothing underneath it changing. Do not quote it on its own."
+                    % (
+                        ", ".join(by),
+                        "/".join(top_key),
+                        100.0 * share,
+                        _pct(top_num, top_den),
+                        _pct(rest_num, rest_den),
+                        ("%.1fx" % factor) if factor != float("inf") else "infinity",
+                    )
+                )
+        return 0
+
+    base, cur = periods
+    blend_base = base["num"] / base["den"]
+    blend_cur = cur["num"] / cur["den"]
+
+    # Direct standardisation: hold each group's BASE rate and give it the
+    # CURRENT mix. Whatever moves is the mix alone; the remainder is the rates.
+    # Groups with no base denominator have no base rate, so they fall back to the
+    # pooled base rate and are counted below, because silently dropping them
+    # would hand the whole of their effect to the wrong term.
+    fallback = 0
+    standardised = 0.0
+    for key, d_cur in cur["den_by"].items():
+        d_base = base["den_by"].get(key, 0.0)
+        if d_base:
+            standardised += (base["num_by"].get(key, 0.0) / d_base) * d_cur
+        else:
+            standardised += blend_base * d_cur
+            fallback += d_cur
+    blend_mix = standardised / cur["den"]
+
+    mix_effect = blend_mix - blend_base
+    rate_effect = blend_cur - blend_mix
+
+    print("%s -> %s" % (base["path"], cur["path"]))
+    print("   pooled %s:  %s  ->  %s" % (label, _pct(base["num"], base["den"]), _pct(cur["num"], cur["den"])))
+    print()
+    print("   decomposition of the pooled change, by direct standardisation:")
+    print("     mix effect   %+.3f pp   (base rates, current %s mix)" % (100.0 * mix_effect, ", ".join(by)))
+    print("     rate effect  %+.3f pp   (what each group actually did)" % (100.0 * rate_effect))
+    if fallback:
+        print(
+            "     note: %s of %s denominator (%s) sits in groups absent from the base\n"
+            "           period; those were held at the pooled base rate."
+            % (fmt(fallback), fmt(cur["den"]), _pct(fallback, cur["den"]))
+        )
+    print()
+
+    if abs(mix_effect) > abs(rate_effect):
+        print(
+            "!! The pooled move is MOSTLY MIX. The %s mix changed; the per-group\n"
+            "   rates did less. Attributing this movement to whatever the rate\n"
+            "   measures -- a product page, a listing, a price -- is not supported\n"
+            "   by this data. Read the per-group columns below instead." % ", ".join(by)
+        )
+    else:
+        print(
+            "-> The pooled move is mostly a real change in the per-group rates, not\n"
+            "   a mix artifact. The per-group columns below say which groups moved."
+        )
+    print()
+
+    keys = sorted(
+        set(base["den_by"]) | set(cur["den_by"]),
+        key=lambda k: -(cur["den_by"].get(k, 0.0) + base["den_by"].get(k, 0.0)),
+    )
+    shown = keys[: args.top] if args.top else keys
+    pairs = []
+    for key in shown:
+        db, dc = base["den_by"].get(key, 0.0), cur["den_by"].get(key, 0.0)
+        nb, nc = base["num_by"].get(key, 0.0), cur["num_by"].get(key, 0.0)
+        pairs.append(
+            list(key)
+            + [
+                _pct(db, base["den"]),
+                _pct(dc, cur["den"]),
+                _pct(nb, db),
+                _pct(nc, dc),
+            ]
+        )
+    print(render_table(pairs, by + ["share base", "share now", "rate base", "rate now"]))
+    if args.top and len(keys) > args.top:
+        print("\n(%d more groups not shown)" % (len(keys) - args.top))
     return 0
 
 
@@ -960,6 +1280,41 @@ def main(argv=None):
     )
     add_where(p_rate)
     p_rate.set_defaults(func=cmd_rate)
+
+    p_ratio = sub.add_parser(
+        "ratio",
+        help="A funnel rate, split by the dimension that decides whether it means anything.",
+    )
+    p_ratio.add_argument(
+        "files",
+        nargs="+",
+        help="One report, or two to compare (base first).",
+    )
+    p_ratio.add_argument(
+        "--numerator",
+        action="append",
+        required=True,
+        metavar="COL=VALUE",
+        help='Rows forming the top of the ratio, e.g. "Event=Page view". Repeatable.',
+    )
+    p_ratio.add_argument(
+        "--denominator",
+        action="append",
+        required=True,
+        metavar="COL=VALUE",
+        help='Rows forming the bottom, e.g. "Event=Impression". Repeatable.',
+    )
+    p_ratio.add_argument(
+        "--by",
+        help="Dimension to split the rate by -- Territory and Source Type are the "
+        "two that matter. Omitting it prints the pooled rate and a warning, "
+        "because a pooled funnel rate is a weighted average and moves when the "
+        "weights move.",
+    )
+    p_ratio.add_argument("--metric", help="Column to sum. Defaults to Counts.")
+    p_ratio.add_argument("--top", type=int, default=12, help="0 for all groups.")
+    add_where(p_ratio)
+    p_ratio.set_defaults(func=cmd_ratio)
 
     p_compare = sub.add_parser("compare", help="Per-row delta between two periods.")
     p_compare.add_argument("base", help="The earlier report.")

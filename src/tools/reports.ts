@@ -52,6 +52,20 @@ const SALES_REPORT_TYPES = [
  * never quoted as a total, so a false flag makes it refuse a file that lost
  * nothing.
  *
+ * It also counts data lines that are byte-identical to another data line.
+ * Apple's reports are aggregates keyed by their dimension columns, so the same
+ * key should appear once; a file where it appears twice double-counts, and every
+ * total taken from it is wrong by exactly that much while looking perfectly
+ * well-formed. That is truncation's mirror image, and it is not hypothetical —
+ * an ONGOING monthly analytics instance was observed holding every row of its
+ * most recent month twice, reporting 7,764 impressions where the
+ * ONE_TIME_SNAPSHOT for the same month held 3,882, on three apps at once, with
+ * nothing in the response saying so.
+ *
+ * Unlike truncation this is reported rather than treated as fatal: a DETAILED
+ * subtype can legitimately repeat a line, so the caller is told to check rather
+ * than stopped.
+ *
  * Exported for direct unit testing: the trailing-newline rule is the kind of
  * off-by-one that a round-trip through a tool call can mask.
  */
@@ -59,6 +73,16 @@ export const previewReport = (tsv: string, maxLines: number): Record<string, unk
   const lines = tsv.split("\n");
   let count = lines.length;
   while (count > 0 && lines[count - 1] === "") count -= 1;
+
+  // Data lines only — the header is unique by construction, and counting it
+  // would make a single-row report look like it repeated itself.
+  const seen = new Set<string>();
+  let duplicateRows = 0;
+  for (let i = 1; i < count; i += 1) {
+    const line = lines[i] as string;
+    if (seen.has(line)) duplicateRows += 1;
+    else seen.add(line);
+  }
 
   const truncated = count > maxLines;
   return {
@@ -73,6 +97,19 @@ export const previewReport = (tsv: string, maxLines: number): Record<string, unk
     dataRows: Math.max(0, count - 1),
     truncated,
     ...(truncated ? { note: `Showing first ${maxLines} of ${count} lines.` } : {}),
+    // Only present when there is something to say, so its absence is not a
+    // claim and its presence is never noise.
+    ...(duplicateRows > 0
+      ? {
+          duplicateRows,
+          duplicateNote:
+            `${duplicateRows} of ${Math.max(0, count - 1)} data rows are byte-identical to ` +
+            `another row, so every total from this report is inflated by them. Apple's ONGOING ` +
+            `monthly analytics instances have been seen doubling a whole month this way. ` +
+            `Cross-check against the ONE_TIME_SNAPSHOT or a WEEKLY instance before quoting a ` +
+            `figure, or de-duplicate first.`,
+        }
+      : {}),
     // Untruncated output is handed back byte-for-byte. Only the sliced path
     // drops the trailing newline, and there the text is already partial.
     report: truncated ? lines.slice(0, maxLines).join("\n") : tsv,
@@ -1143,15 +1180,21 @@ export const registerReportTools = (
     "app_store_connect_get_analytics_status",
     {
       description:
-        'Answer "is there any analytics data yet, and how far back does it go" in one call. ' +
-        "Walks the whole chain — requests, then reports, then instances — and returns the counts " +
-        "plus the earliest and latest processing dates, instead of the four-to-six paginated " +
-        "calls the walk normally takes. Use this first whenever the question is whether " +
-        "analytics are available at all, especially just after creating a request: instances is " +
-        "the number that matters, because reports exist as soon as Apple registers them but hold " +
-        "nothing until instances appear a day or two later. FRAMEWORK_USAGE reports are excluded " +
-        "by default — they are the bulk of the catalogue and almost never what a product " +
-        "question is about.",
+        'Answer "is there any analytics data yet" in one call. Walks the whole chain — ' +
+        "requests, then reports, then instances — and returns the counts plus the earliest and " +
+        "latest instance PROCESSING dates, instead of the four-to-six paginated calls the walk " +
+        "normally takes. Use this first whenever the question is whether analytics are " +
+        "available at all, especially just after creating a request: instances is the number " +
+        "that matters, because reports exist as soon as Apple registers them but hold nothing " +
+        "until instances appear a day or two later. " +
+        "It does NOT answer how far back the data reaches. earliestInstanceDate is when Apple " +
+        "generated the instance, not the oldest date inside it: on an account where snapshots " +
+        "had just been created it read 2026-08-25 on every app while the segments held twelve " +
+        "months of history, so reading it as the reach makes a full backfill look like it " +
+        "recovered nothing. The reach is the Date column inside the segment — download one with " +
+        "app_store_connect_download_analytics_report_segment and look. " +
+        "FRAMEWORK_USAGE reports are excluded by default — they are the bulk of the catalogue " +
+        "and almost never what a product question is about.",
       inputSchema: {
         appId: appIdArg,
         category: z
@@ -1277,6 +1320,20 @@ export const registerReportTools = (
           instances,
           earliestInstanceDate: dates[0] ?? null,
           latestInstanceDate: dates[dates.length - 1] ?? null,
+          // The description says this too, but a caller reading a payload is
+          // looking at the dates, not at the schema. A field named
+          // `earliestInstanceDate` sitting beside an instance count reads as the
+          // start of the data unless something in the payload says otherwise.
+          ...(dates.length > 0
+            ? {
+                instanceDatesNote:
+                  "earliest/latestInstanceDate are PROCESSING dates — when Apple generated the " +
+                  "instances — and say nothing about how far back the data inside them goes. A " +
+                  "freshly created ONE_TIME_SNAPSHOT carries ~52 weeks of history and still " +
+                  "reports today's date here. For the actual reach, download a segment and read " +
+                  "its Date column.",
+              }
+            : {}),
           byCategory,
           reportsProbed: probed.length,
           ...(excluded > 0 ? { frameworkUsageReportsExcluded: excluded } : {}),
