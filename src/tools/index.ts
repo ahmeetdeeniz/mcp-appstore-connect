@@ -2,6 +2,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 
 import type { AppStoreConnectClient } from "../client/asc.js";
 import type { Contact } from "../config.js";
+import { isConfigured, type Config } from "../config.js";
 import { registerAppInfoTools } from "./appinfos.js";
 import { registerAppTools } from "./apps.js";
 import { registerBuildTools } from "./builds.js";
@@ -16,12 +17,14 @@ import { registerPricingTools } from "./pricing.js";
 import { registerReportTools } from "./reports.js";
 import { registerReviewDetailTools } from "./reviewdetails.js";
 import { registerScreenshotTools } from "./screenshots.js";
+import { registerStatusTool } from "./status.js";
 import { registerSubmissionTools } from "./submissions.js";
 import { registerTestflightTools } from "./testflight.js";
 import { registerUserTools } from "./users.js";
 import { registerVersionTools } from "./versions.js";
 
 export type ToolContext = {
+  config: Config;
   /** Register the mutating tools too. Off by default — see APP_STORE_CONNECT_ALLOW_WRITES. */
   allowWrites: boolean;
   /** Vendor number for sales/finance reports. Reports fail with a clear error when unset. */
@@ -53,6 +56,11 @@ export const registerTools = (
   ctx: ToolContext,
 ): void => {
   const { allowWrites } = ctx;
+  // Registered first and unconditionally, so an unconfigured server is still a
+  // useful one — it can say what to set — rather than a connection that closes.
+  registerStatusTool(server, ctx.config);
+  if (!isConfigured(ctx.config)) return;
+
   registerAppTools(server, client, allowWrites);
   registerVersionTools(server, client, allowWrites);
   registerSubmissionTools(server, client, allowWrites);

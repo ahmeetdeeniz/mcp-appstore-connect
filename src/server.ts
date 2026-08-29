@@ -31,10 +31,13 @@ export const createServer = (opts: CreateServerOptions): CreatedServer => {
   const tokenProvider =
     opts.tokenProvider ??
     createTokenProvider({
+      // Placeholders when unconfigured: the provider is built either way so
+      // `createServer` stays total, but no API-calling tool is registered, so
+      // it is never actually asked to mint a token.
       credentials: {
-        keyId: config.keyId,
-        issuerId: config.issuerId,
-        privateKey: config.privateKey,
+        keyId: config.keyId ?? "",
+        issuerId: config.issuerId ?? "",
+        privateKey: config.privateKey ?? "",
       },
       ttlSeconds: config.tokenTtlSeconds,
       ...(opts.logger ? { logger: opts.logger } : {}),
@@ -49,6 +52,7 @@ export const createServer = (opts: CreateServerOptions): CreatedServer => {
   });
 
   registerTools(server, client, {
+    config,
     allowWrites: config.allowWrites,
     vendorNumber: config.vendorNumber,
     vendorNumberSource: config.vendorNumberSource,
