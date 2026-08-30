@@ -8,7 +8,7 @@ import {
   DEFAULT_METADATA_ROOT,
   MetadataRootError,
   normalizeMetadataRoot,
-} from "./listing/document.js";
+} from "#/listing/document";
 
 /**
  * Shared by both schemas so a bad root is rejected the same way whether it came

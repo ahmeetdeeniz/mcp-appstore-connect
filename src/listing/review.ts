@@ -6,7 +6,7 @@ import {
   type ListingField,
   charCount,
   orderLocales,
-} from "./document.js";
+} from "#/listing/document";
 
 const LABELS: Record<ListingField, string> = {
   name: "Name",

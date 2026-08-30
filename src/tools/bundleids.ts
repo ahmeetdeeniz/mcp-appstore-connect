@@ -1,9 +1,9 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 
-import type { AppStoreConnectClient } from "../client/asc.js";
-import { summarizeResponse } from "../client/shape.js";
-import { compact, confirmArg, limitArg, wrap } from "./util.js";
+import type { AppStoreConnectClient } from "#/client/asc";
+import { summarizeResponse } from "#/client/shape";
+import { compact, confirmArg, limitArg, wrap } from "#/tools/util";
 
 const BUNDLE_PLATFORMS = ["IOS", "MAC_OS", "UNIVERSAL"] as const;
 

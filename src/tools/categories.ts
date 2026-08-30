@@ -1,9 +1,9 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 
-import type { AppStoreConnectClient } from "../client/asc.js";
-import { includedOf, resourcesOf, summarizeResponse } from "../client/shape.js";
-import { PLATFORMS, compact, limitArg, wrap } from "./util.js";
+import type { AppStoreConnectClient } from "#/client/asc";
+import { includedOf, resourcesOf, summarizeResponse } from "#/client/shape";
+import { PLATFORMS, compact, limitArg, wrap } from "#/tools/util";
 
 // A category is not metadata you can leave for later: an app with no
 // primaryCategory is refused at submission with

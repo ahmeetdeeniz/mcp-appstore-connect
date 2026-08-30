@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { basename, isAbsolute } from "node:path";
 
-import type { AppStoreConnectClient } from "../client/asc.js";
+import type { AppStoreConnectClient } from "#/client/asc";
 
 // Apple uploads every binary asset the same way — reserve, PUT the bytes to a
 // pre-signed URL, commit a checksum, then poll while validation runs

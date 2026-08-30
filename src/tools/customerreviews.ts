@@ -1,9 +1,9 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 
-import type { AppStoreConnectClient } from "../client/asc.js";
-import { summarizeResponse } from "../client/shape.js";
-import { appIdArg, compact, limitArg, territoryArg, wrap } from "./util.js";
+import type { AppStoreConnectClient } from "#/client/asc";
+import { summarizeResponse } from "#/client/shape";
+import { appIdArg, compact, limitArg, territoryArg, wrap } from "#/tools/util";
 
 export const registerCustomerReviewTools = (
   server: McpServer,

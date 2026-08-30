@@ -1,9 +1,9 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 
-import type { AppStoreConnectClient } from "../client/asc.js";
-import { summarizeResponse } from "../client/shape.js";
-import { appIdArg, compact, limitArg, wrap } from "./util.js";
+import type { AppStoreConnectClient } from "#/client/asc";
+import { summarizeResponse } from "#/client/shape";
+import { appIdArg, compact, limitArg, wrap } from "#/tools/util";
 
 // An app's listing is split across two resources, and which one holds a field is
 // not guessable: appStoreVersionLocalizations carry the per-version copy

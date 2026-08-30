@@ -1,7 +1,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 
-import type { AppStoreConnectClient } from "../client/asc.js";
+import type { AppStoreConnectClient } from "#/client/asc";
 import {
   type Rec,
   attributesOf,
@@ -10,7 +10,7 @@ import {
   resourceOf,
   resourcesOf,
   summarizeResponse,
-} from "../client/shape.js";
+} from "#/client/shape";
 import {
   PLATFORMS,
   PreconditionError,
@@ -21,7 +21,7 @@ import {
   limitArg,
   versionIdArg,
   wrap,
-} from "./util.js";
+} from "#/tools/util";
 
 const SUBMISSION_STATES = [
   "READY_FOR_REVIEW",

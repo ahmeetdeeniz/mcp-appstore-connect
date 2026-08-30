@@ -3,10 +3,10 @@ import { createHash } from "node:crypto";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 
-import type { AppStoreConnectClient, UploadOperation } from "../client/asc.js";
-import { summarizeResponse } from "../client/shape.js";
-import { attributesOf, idOf, isRecord, pollAssetState, readImage } from "./assets.js";
-import { compact, confirmArg, limitArg, wrap } from "./util.js";
+import type { AppStoreConnectClient, UploadOperation } from "#/client/asc";
+import { summarizeResponse } from "#/client/shape";
+import { attributesOf, idOf, isRecord, pollAssetState, readImage } from "#/tools/assets";
+import { compact, confirmArg, limitArg, wrap } from "#/tools/util";
 
 /**
  * Apple's ScreenshotDisplayType enum (spec 3.2). Hardcoded rather than accepted

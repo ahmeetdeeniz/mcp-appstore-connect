@@ -1,7 +1,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 
-import type { AppStoreConnectClient } from "../client/asc.js";
+import type { AppStoreConnectClient } from "#/client/asc";
 import {
   attributesOf,
   includedOf,
@@ -9,7 +9,7 @@ import {
   resourceOf,
   resourcesOf,
   summarizeResponse,
-} from "../client/shape.js";
+} from "#/client/shape";
 import {
   PreconditionError,
   appIdArg,
@@ -19,7 +19,7 @@ import {
   limitArg,
   territoryArg,
   wrap,
-} from "./util.js";
+} from "#/tools/util";
 
 // The app's OWN price is a separate resource from any in-app purchase's, and
 // having priced the IAP does nothing for it: a version cannot be submitted until

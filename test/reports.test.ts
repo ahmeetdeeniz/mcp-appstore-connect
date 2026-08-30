@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { previewReport } from "../src/tools/reports.js";
+import { previewReport } from "#/tools/reports";
 
 /**
  * `previewReport` decides two numbers a caller cannot check for themselves —

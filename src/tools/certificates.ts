@@ -4,9 +4,9 @@ import { dirname } from "node:path";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 
-import type { AppStoreConnectClient } from "../client/asc.js";
-import { attributesOf, isRecord, resourceOf, summarizeResponse } from "../client/shape.js";
-import { compact, confirmArg, limitArg, wrap } from "./util.js";
+import type { AppStoreConnectClient } from "#/client/asc";
+import { attributesOf, isRecord, resourceOf, summarizeResponse } from "#/client/shape";
+import { compact, confirmArg, limitArg, wrap } from "#/tools/util";
 
 /**
  * Apple's `CertificateType` is a moving target — DEVELOPER_ID_APPLICATION_G2 and

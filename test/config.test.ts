@@ -5,7 +5,7 @@ import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { loadConfig, resolveConfigPath, isConfigured, setupInstructions } from "../src/config.js";
+import { loadConfig, resolveConfigPath, isConfigured, setupInstructions } from "#/config";
 
 const pem = generateKeyPairSync("ec", { namedCurve: "P-256" })
   .privateKey.export({ type: "pkcs8", format: "pem" })

@@ -2,10 +2,10 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { describe, expect, it, vi } from "vitest";
 
-import { staticTokenProvider } from "../src/client/auth.js";
-import type { Config } from "../src/config.js";
-import { digest } from "../src/listing/document.js";
-import { createServer } from "../src/server.js";
+import { staticTokenProvider } from "#/client/auth";
+import type { Config } from "#/config";
+import { digest } from "#/listing/document";
+import { createServer } from "#/server";
 
 const baseConfig: Config = {
   keyId: "ABCD123456",

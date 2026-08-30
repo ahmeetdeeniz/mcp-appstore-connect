@@ -4,11 +4,11 @@ import { dirname, isAbsolute } from "node:path";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 
-import type { AppStoreConnectClient } from "../client/asc.js";
-import { AppStoreConnectApiError } from "../client/errors.js";
-import { attributesOf, type Rec, resourcesOf, summarizeResponse } from "../client/shape.js";
-import type { ToolContext } from "./index.js";
-import { appIdArg, compact, limitArg, PreconditionError, wrap } from "./util.js";
+import type { AppStoreConnectClient } from "#/client/asc";
+import { AppStoreConnectApiError } from "#/client/errors";
+import { attributesOf, type Rec, resourcesOf, summarizeResponse } from "#/client/shape";
+import type { ToolContext } from "#/tools/index";
+import { appIdArg, compact, limitArg, PreconditionError, wrap } from "#/tools/util";
 
 const FREQUENCIES = ["DAILY", "WEEKLY", "MONTHLY", "YEARLY"] as const;
 

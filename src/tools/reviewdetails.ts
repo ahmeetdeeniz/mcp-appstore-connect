@@ -1,11 +1,11 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 
-import type { AppStoreConnectClient } from "../client/asc.js";
-import { attributesOf, resourceOf, summarizeResponse } from "../client/shape.js";
-import type { Contact } from "../config.js";
-import type { ToolContext } from "./index.js";
-import { compact, getOrNull, versionIdArg, wrap } from "./util.js";
+import type { AppStoreConnectClient } from "#/client/asc";
+import { attributesOf, resourceOf, summarizeResponse } from "#/client/shape";
+import type { Contact } from "#/config";
+import type { ToolContext } from "#/tools/index";
+import { compact, getOrNull, versionIdArg, wrap } from "#/tools/util";
 
 // App Review Information: who Apple contacts, and how they get into the app.
 // The resource does not exist until someone creates it, and a version without

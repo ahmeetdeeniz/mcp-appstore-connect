@@ -8,9 +8,9 @@ import {
   normalizeMetadataRoot,
   sidecarPath,
   toSidecar,
-} from "../src/listing/document.js";
-import { parseManifest, toManifest } from "../src/listing/manifest.js";
-import { renderReview } from "../src/listing/review.js";
+} from "#/listing/document";
+import { parseManifest, toManifest } from "#/listing/manifest";
+import { renderReview } from "#/listing/review";
 
 const SIDECAR_PATH = sidecarPath(DEFAULT_METADATA_ROOT);
 

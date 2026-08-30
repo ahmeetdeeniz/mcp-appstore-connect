@@ -3,20 +3,25 @@ import { createHash } from "node:crypto";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 
-import type { AppStoreConnectClient, UploadOperation } from "../client/asc.js";
+import type { AppStoreConnectClient, UploadOperation } from "#/client/asc";
 import {
   attributesOf,
   relatedId,
   resourceOf,
   resourcesOf,
   summarizeResponse,
-} from "../client/shape.js";
+} from "#/client/shape";
 // `attributesOf` exists in both modules and they are NOT interchangeable: the
 // one from shape.js takes a resource, this one takes the whole response
 // envelope. Aliased rather than imported bare so the two cannot be swapped by a
 // tidy-up.
-import { attributesOf as envelopeAttributes, idOf, pollAssetState, readImage } from "./assets.js";
-import { MANUAL_PRICE_LIMIT, manualPriceNote, manualPriceRows } from "./pricing.js";
+import {
+  attributesOf as envelopeAttributes,
+  idOf,
+  pollAssetState,
+  readImage,
+} from "#/tools/assets";
+import { MANUAL_PRICE_LIMIT, manualPriceNote, manualPriceRows } from "#/tools/pricing";
 import {
   PreconditionError,
   appIdArg,
@@ -26,7 +31,7 @@ import {
   limitArg,
   territoryArg,
   wrap,
-} from "./util.js";
+} from "#/tools/util";
 
 const IAP_TYPES = ["CONSUMABLE", "NON_CONSUMABLE", "NON_RENEWING_SUBSCRIPTION"] as const;
 

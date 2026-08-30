@@ -1,9 +1,9 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 
-import type { AppStoreConnectClient } from "../client/asc.js";
-import { summarizeResponse } from "../client/shape.js";
-import { appIdArg, compact, confirmArg, limitArg, PreconditionError, wrap } from "./util.js";
+import type { AppStoreConnectClient } from "#/client/asc";
+import { summarizeResponse } from "#/client/shape";
+import { appIdArg, compact, confirmArg, limitArg, PreconditionError, wrap } from "#/tools/util";
 
 const groupIdArg = z
   .string()

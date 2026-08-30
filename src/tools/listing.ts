@@ -1,8 +1,8 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 
-import type { AppStoreConnectClient } from "../client/asc.js";
-import { applyListing, type Rejection } from "../listing/apply.js";
+import type { AppStoreConnectClient } from "#/client/asc";
+import { applyListing, type Rejection } from "#/listing/apply";
 import {
   FIELD_LIMITS,
   MetadataRootError,
@@ -10,12 +10,12 @@ import {
   charCount,
   normalizeMetadataRoot,
   sidecarPath,
-} from "../listing/document.js";
-import { fetchListing } from "../listing/fetch.js";
-import { ManifestError, parseManifest, toManifest } from "../listing/manifest.js";
-import { renderReview } from "../listing/review.js";
-import type { ToolContext } from "./index.js";
-import { appIdArg, fail, ok, okText, wrapResult } from "./util.js";
+} from "#/listing/document";
+import { fetchListing } from "#/listing/fetch";
+import { ManifestError, parseManifest, toManifest } from "#/listing/manifest";
+import { renderReview } from "#/listing/review";
+import type { ToolContext } from "#/tools/index";
+import { appIdArg, fail, ok, okText, wrapResult } from "#/tools/util";
 
 const PLATFORMS = ["IOS", "MAC_OS", "TV_OS", "VISION_OS"] as const;
 
