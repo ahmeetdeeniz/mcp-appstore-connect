@@ -55,6 +55,7 @@ export const registerAppInfoTools = (
   server.registerTool(
     "app_store_connect_list_app_infos",
     {
+      title: "App Store Connect: List App Infos",
       description:
         "List an app's appInfo records, which hold the version-independent listing: name, " +
         "subtitle, privacy policy, categories and age rating. An app usually has two — the live " +
@@ -76,6 +77,7 @@ export const registerAppInfoTools = (
   server.registerTool(
     "app_store_connect_list_app_info_localizations",
     {
+      title: "App Store Connect: List App Info Localizations",
       description:
         "List the per-locale name, subtitle and privacy policy for one appInfo. Returns the " +
         "localization ids you update.",
@@ -93,6 +95,7 @@ export const registerAppInfoTools = (
   server.registerTool(
     "app_store_connect_get_app_info_localization",
     {
+      title: "App Store Connect: Get App Info Localization",
       description: "Get one locale's name, subtitle and privacy policy fields.",
       inputSchema: { localizationId: appInfoLocalizationIdArg },
       annotations: { readOnlyHint: true },
@@ -106,6 +109,7 @@ export const registerAppInfoTools = (
   server.registerTool(
     "app_store_connect_get_age_rating_declaration",
     {
+      title: "App Store Connect: Get Age Rating Declaration",
       description:
         "Read an app's age rating questionnaire answers — the content declarations behind the " +
         "rating, including `socialMedia`, `userGeneratedContent` and `messagingAndChat`. Returns " +
@@ -125,6 +129,7 @@ export const registerAppInfoTools = (
   server.registerTool(
     "app_store_connect_update_age_rating_declaration",
     {
+      title: "App Store Connect: Update Age Rating Declaration",
       description:
         "Answer the age rating questionnaire. Only the fields you pass are changed, so a single " +
         "unanswered question can be filled in without restating the rest. Apple recomputes the " +
@@ -213,6 +218,7 @@ export const registerAppInfoTools = (
   server.registerTool(
     "app_store_connect_update_app_info_localization",
     {
+      title: "App Store Connect: Update App Info Localization",
       description:
         "Update the version-independent listing fields for one locale: app name (30 chars), " +
         "subtitle (30 chars) and privacy policy. Only the fields you pass are changed. Apple " +

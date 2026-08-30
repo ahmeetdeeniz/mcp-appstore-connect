@@ -13,6 +13,7 @@ export const registerBuildTools = (
   server.registerTool(
     "app_store_connect_list_builds",
     {
+      title: "App Store Connect: List Builds",
       description:
         "List builds uploaded for an app (version, upload date, processing state, expiry). Filter " +
         "by version string or processing state to find e.g. the latest VALID build for TestFlight.",

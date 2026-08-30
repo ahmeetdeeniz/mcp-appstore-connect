@@ -22,6 +22,7 @@ export const registerBundleIdTools = (
   server.registerTool(
     "app_store_connect_list_bundle_ids",
     {
+      title: "App Store Connect: List Bundle IDs",
       description:
         "List registered bundle ids (App IDs) on the developer account, with their identifier " +
         "string, name and platform. Returns the resource ids used to manage capabilities.",
@@ -50,6 +51,7 @@ export const registerBundleIdTools = (
   server.registerTool(
     "app_store_connect_get_bundle_id",
     {
+      title: "App Store Connect: Get Bundle ID",
       description: "Get one bundle id's attributes by its resource id.",
       inputSchema: { bundleId: bundleIdArg },
       annotations: { readOnlyHint: true },
@@ -63,6 +65,7 @@ export const registerBundleIdTools = (
   server.registerTool(
     "app_store_connect_create_bundle_id",
     {
+      title: "App Store Connect: Create Bundle ID",
       description:
         "Register a new bundle id (App ID) on the developer account. The identifier is permanent " +
         "and cannot be reused once created.",
@@ -90,6 +93,7 @@ export const registerBundleIdTools = (
   server.registerTool(
     "app_store_connect_enable_capability",
     {
+      title: "App Store Connect: Enable Capability",
       description:
         "Enable a capability (App Service) on a bundle id, e.g. PUSH_NOTIFICATIONS, ICLOUD, " +
         "GAME_CENTER, ASSOCIATED_DOMAINS, APP_GROUPS.",
@@ -123,6 +127,7 @@ export const registerBundleIdTools = (
   server.registerTool(
     "app_store_connect_disable_capability",
     {
+      title: "App Store Connect: Disable Capability",
       description: "Disable a capability on a bundle id by its capability id.",
       inputSchema: {
         capabilityId: z

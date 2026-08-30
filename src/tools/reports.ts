@@ -672,6 +672,7 @@ export const registerReportTools = (
   server.registerTool(
     "app_store_connect_get_vendor_number",
     {
+      title: "App Store Connect: Get Vendor Number",
       description:
         "Report the vendor number the sales and finance report tools will use, where it came " +
         "from, and whether this API key can actually read it. Apple exposes no endpoint that " +
@@ -740,6 +741,7 @@ export const registerReportTools = (
   server.registerTool(
     "app_store_connect_download_sales_report",
     {
+      title: "App Store Connect: Download Sales Report",
       description:
         "Download a sales & trends report (units, proceeds) as TSV. Reports lag ~24h and are " +
         "keyed by date: DAILY needs YYYY-MM-DD, WEEKLY the week-ending Sunday, MONTHLY YYYY-MM, " +
@@ -858,6 +860,7 @@ export const registerReportTools = (
   server.registerTool(
     "app_store_connect_download_finance_report",
     {
+      title: "App Store Connect: Download Finance Report",
       description:
         "Download a financial report (money Apple actually paid, by region) as TSV for one " +
         "fiscal month. This is the authoritative source for proceeds — prefer it over the sales " +
@@ -938,6 +941,7 @@ export const registerReportTools = (
   server.registerTool(
     "app_store_connect_list_analytics_report_requests",
     {
+      title: "App Store Connect: List Analytics Report Requests",
       description:
         "List an app's existing analytics report requests. Step 1 of reading analytics: a request " +
         "is created once per app and then keeps producing reports, so list first and reuse the id " +
@@ -968,6 +972,7 @@ export const registerReportTools = (
   server.registerTool(
     "app_store_connect_list_analytics_reports",
     {
+      title: "App Store Connect: List Analytics Reports",
       description:
         "List the reports produced for an analytics report request (step 2). Each report is a " +
         "named dataset — installs and deletions, discovery and engagement, sales, retention — and " +
@@ -1011,6 +1016,7 @@ export const registerReportTools = (
   server.registerTool(
     "app_store_connect_list_analytics_report_instances",
     {
+      title: "App Store Connect: List Analytics Report Instances",
       description:
         "List the instances of an analytics report (step 3) — one per granularity and processing " +
         "date. Pick the instance you want, then pass its id to " +
@@ -1052,6 +1058,7 @@ export const registerReportTools = (
   server.registerTool(
     "app_store_connect_list_analytics_report_segments",
     {
+      title: "App Store Connect: List Analytics Report Segments",
       description:
         "List the segments of an analytics report instance — the files the data is split across, " +
         "with their compressed size and checksum. Use this to see how large a download will be; " +
@@ -1083,6 +1090,7 @@ export const registerReportTools = (
   server.registerTool(
     "app_store_connect_download_analytics_report_segment",
     {
+      title: "App Store Connect: Download Analytics Report Segment",
       description:
         "Download the actual analytics data for a report instance (step 4) and return it as text. " +
         "This is the only tool that reaches the numbers — impressions, product page views, " +
@@ -1179,6 +1187,7 @@ export const registerReportTools = (
   server.registerTool(
     "app_store_connect_get_analytics_status",
     {
+      title: "App Store Connect: Get Analytics Status",
       description:
         'Answer "is there any analytics data yet" in one call. Walks the whole chain — ' +
         "requests, then reports, then instances — and returns the counts plus the earliest and " +
@@ -1372,6 +1381,7 @@ export const registerReportTools = (
   server.registerTool(
     "app_store_connect_create_analytics_report_request",
     {
+      title: "App Store Connect: Create Analytics Report Request",
       description:
         "Request analytics reports for an app — the one-off setup step before any analytics can " +
         "be read. Check app_store_connect_list_analytics_report_requests first: Apple rejects a " +

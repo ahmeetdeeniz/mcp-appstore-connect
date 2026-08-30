@@ -204,6 +204,7 @@ export const registerVersionTools = (
   server.registerTool(
     "app_store_connect_list_versions",
     {
+      title: "App Store Connect: List Versions",
       description:
         "List an app's App Store versions (each versionString and its review state, e.g. " +
         "PREPARE_FOR_SUBMISSION, WAITING_FOR_REVIEW, READY_FOR_SALE).",
@@ -238,6 +239,7 @@ export const registerVersionTools = (
   server.registerTool(
     "app_store_connect_get_version",
     {
+      title: "App Store Connect: Get Version",
       description:
         "Get one App Store version with the build attached to it. This is the only read that " +
         'answers "which binary would this version actually ship?" — app_store_connect_list_versions ' +
@@ -275,6 +277,7 @@ export const registerVersionTools = (
   server.registerTool(
     "app_store_connect_list_version_localizations",
     {
+      title: "App Store Connect: List Version Localizations",
       description:
         "List the per-locale metadata rows for one App Store version (each carries description, " +
         "keywords, what's-new, promotional text). Returns the localization ids you update.",
@@ -295,6 +298,7 @@ export const registerVersionTools = (
   server.registerTool(
     "app_store_connect_get_version_localization",
     {
+      title: "App Store Connect: Get Version Localization",
       description:
         "Get one locale's full App Store metadata (description, keywords, what's-new, …).",
       inputSchema: { localizationId: localizationIdArg },
@@ -311,6 +315,7 @@ export const registerVersionTools = (
   server.registerTool(
     "app_store_connect_create_version",
     {
+      title: "App Store Connect: Create Version",
       description:
         "Create a new App Store version for an app (e.g. start metadata for 1.3.0). The version " +
         "begins in PREPARE_FOR_SUBMISSION; attach a build with " +
@@ -346,6 +351,7 @@ export const registerVersionTools = (
   server.registerTool(
     "app_store_connect_update_version",
     {
+      title: "App Store Connect: Update Version",
       description:
         "Update an App Store version's own attributes — most usefully releaseType, which decides " +
         "whether an approved version goes live automatically (AFTER_APPROVAL), waits for you to " +
@@ -386,6 +392,7 @@ export const registerVersionTools = (
   server.registerTool(
     "app_store_connect_update_version_localization",
     {
+      title: "App Store Connect: Update Version Localization",
       description:
         "Update the App Store metadata for one locale of a version: description, keywords, " +
         "what's-new (release notes), promotional text, marketing/support URLs. Only the fields " +
@@ -430,6 +437,7 @@ export const registerVersionTools = (
   server.registerTool(
     "app_store_connect_set_version_build",
     {
+      title: "App Store Connect: Set Version Build",
       description:
         "Attach a build to an App Store version — the last step before submitting. Pass detach: " +
         "true instead of a buildId to remove the currently attached build. The version must be " +
@@ -492,6 +500,7 @@ export const registerVersionTools = (
   server.registerTool(
     "app_store_connect_release_version",
     {
+      title: "App Store Connect: Release Version",
       description:
         "Release an approved version that is waiting in PENDING_DEVELOPER_RELEASE — the manual " +
         "'Release This Version' button. Use this after Apple approves a version created with " +

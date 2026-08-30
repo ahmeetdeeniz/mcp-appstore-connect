@@ -222,6 +222,7 @@ export const registerScreenshotTools = (
   server.registerTool(
     "app_store_connect_list_screenshot_sets",
     {
+      title: "App Store Connect: List Screenshot Sets",
       description:
         "List the screenshot sets of one App Store version localization — one set per device " +
         "type (screenshotDisplayType). Returns the set ids you upload into or reorder.",
@@ -242,6 +243,7 @@ export const registerScreenshotTools = (
   server.registerTool(
     "app_store_connect_list_screenshots",
     {
+      title: "App Store Connect: List Screenshots",
       description:
         "List the screenshots in one set, in display order, with each file name, upload state " +
         "and image dimensions. Use it to audit what a device type currently shows on the store.",
@@ -264,6 +266,7 @@ export const registerScreenshotTools = (
   server.registerTool(
     "app_store_connect_get_screenshot",
     {
+      title: "App Store Connect: Get Screenshot",
       description:
         "Get one screenshot, including its assetDeliveryState — the way to check whether App " +
         "Store Connect finished processing an upload that was still in progress.",
@@ -283,6 +286,7 @@ export const registerScreenshotTools = (
   server.registerTool(
     "app_store_connect_upload_screenshot",
     {
+      title: "App Store Connect: Upload Screenshot",
       description:
         "Upload a screenshot image to an App Store version localization. Runs the whole upload " +
         "flow: finds or creates the set for the device type, reserves the asset, uploads the " +
@@ -338,6 +342,7 @@ export const registerScreenshotTools = (
   server.registerTool(
     "app_store_connect_delete_screenshot",
     {
+      title: "App Store Connect: Delete Screenshot",
       description:
         "Delete one screenshot from its set. Use this to remove a screenshot App Store Connect " +
         "rejected during processing, or to make room in a full set.",
@@ -354,6 +359,7 @@ export const registerScreenshotTools = (
   server.registerTool(
     "app_store_connect_delete_screenshot_set",
     {
+      title: "App Store Connect: Delete Screenshot Set",
       description:
         "Delete an entire screenshot set, and with it EVERY screenshot for that device type. " +
         "This is the way to replace a device type's screenshots wholesale: delete the set, then " +
@@ -371,6 +377,7 @@ export const registerScreenshotTools = (
   server.registerTool(
     "app_store_connect_reorder_screenshots",
     {
+      title: "App Store Connect: Reorder Screenshots",
       description:
         "Set the display order of the screenshots in a set — this is the order customers see on " +
         "the App Store, and it is NOT the upload order. WARNING: the ids you pass REPLACE the " +

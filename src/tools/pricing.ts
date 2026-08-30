@@ -132,6 +132,7 @@ export const registerPricingTools = (
   server.registerTool(
     "app_store_connect_list_app_price_points",
     {
+      title: "App Store Connect: List App Price Points",
       description:
         "List the price points an app can be sold at in one territory, each with its customer " +
         "price and your proceeds. Returns the appPricePoints ids that " +
@@ -161,6 +162,7 @@ export const registerPricingTools = (
   server.registerTool(
     "app_store_connect_get_app_price_schedule",
     {
+      title: "App Store Connect: Get App Price Schedule",
       description:
         "Show what an app currently costs: its base territory and every manual price in force, " +
         "each with its territory, its customerPrice and proceeds, and its start/end date. A " +
@@ -207,6 +209,7 @@ export const registerPricingTools = (
   server.registerTool(
     "app_store_connect_set_app_price",
     {
+      title: "App Store Connect: Set App Price",
       description:
         "Set what an app costs, by pointing it at a price point from " +
         "app_store_connect_list_app_price_points. Prices in every other territory are derived " +

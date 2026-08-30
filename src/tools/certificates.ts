@@ -75,6 +75,7 @@ export const registerCertificateTools = (
   server.registerTool(
     "app_store_connect_list_certificates",
     {
+      title: "App Store Connect: List Certificates",
       description:
         "List the signing certificates on the developer account — type, name, platform, serial " +
         "number and expiry. Use this before creating one: Developer ID certificates are capped " +
@@ -108,6 +109,7 @@ export const registerCertificateTools = (
   server.registerTool(
     "app_store_connect_download_certificate",
     {
+      title: "App Store Connect: Download Certificate",
       description:
         "Write an existing certificate to a .cer file, ready to double-click into the keychain. " +
         "Note this recovers only the public certificate: it is useless without the private key " +
@@ -138,6 +140,7 @@ export const registerCertificateTools = (
   server.registerTool(
     "app_store_connect_create_certificate",
     {
+      title: "App Store Connect: Create Certificate",
       description:
         "Create a signing certificate from a certificate signing request. " +
         "**The CSR must be generated locally first**, because it is bound to a private key that " +
@@ -189,6 +192,7 @@ export const registerCertificateTools = (
   server.registerTool(
     "app_store_connect_revoke_certificate",
     {
+      title: "App Store Connect: Revoke Certificate",
       description:
         "Revoke a certificate. This is not undoable and it is not merely cleanup: anything still " +
         "distributed that was signed with it — and not yet notarized — can stop being trusted. " +

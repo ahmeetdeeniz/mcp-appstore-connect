@@ -62,6 +62,7 @@ export const registerCategoryTools = (
   server.registerTool(
     "app_store_connect_list_app_categories",
     {
+      title: "App Store Connect: List App Categories",
       description:
         "List the App Store categories an app can be filed under, with their subcategories. " +
         "Returns the appCategories ids that app_store_connect_set_app_categories takes. " +
@@ -116,6 +117,7 @@ export const registerCategoryTools = (
   server.registerTool(
     "app_store_connect_set_app_categories",
     {
+      title: "App Store Connect: Set App Categories",
       description:
         "Set an app's App Store category. A primary category is REQUIRED before a version can be " +
         "submitted; without one Apple refuses the submission with a relationship error against " +

@@ -109,6 +109,7 @@ export const registerIapTools = (
   server.registerTool(
     "app_store_connect_list_in_app_purchases",
     {
+      title: "App Store Connect: List In-App Purchases",
       description:
         "List an app's in-app purchases (name, productId, type, review state). Returns the " +
         "inAppPurchase ids the pricing tools take. Covers one-time purchases only — " +
@@ -146,6 +147,7 @@ export const registerIapTools = (
   server.registerTool(
     "app_store_connect_get_in_app_purchase",
     {
+      title: "App Store Connect: Get In-App Purchase",
       description: "Get one in-app purchase's attributes by its resource id.",
       inputSchema: { inAppPurchaseId: inAppPurchaseIdArg },
       annotations: { readOnlyHint: true },
@@ -159,6 +161,7 @@ export const registerIapTools = (
   server.registerTool(
     "app_store_connect_list_iap_price_points",
     {
+      title: "App Store Connect: List IAP Price Points",
       description:
         "List the price points available to an in-app purchase in one territory — each is an id " +
         "plus the customer-facing price and your proceeds. This is the catalogue you pick from: " +
@@ -186,6 +189,7 @@ export const registerIapTools = (
   server.registerTool(
     "app_store_connect_get_iap_price_schedule",
     {
+      title: "App Store Connect: Get IAP Price Schedule",
       description:
         "Show what an in-app purchase currently costs: its base territory and every manual price " +
         "in force, each with its territory, its customerPrice and proceeds, and its start/end " +
@@ -228,6 +232,7 @@ export const registerIapTools = (
   server.registerTool(
     "app_store_connect_list_iap_localizations",
     {
+      title: "App Store Connect: List IAP Localizations",
       description:
         "List an in-app purchase's per-locale display name and description — the customer-facing " +
         "copy shown on the purchase sheet, which is separate from the app's own listing. Returns " +
@@ -251,6 +256,7 @@ export const registerIapTools = (
   server.registerTool(
     "app_store_connect_get_iap_review_screenshot",
     {
+      title: "App Store Connect: Get IAP Review Screenshot",
       description:
         "Get the review screenshot attached to an in-app purchase, including its " +
         "`assetDeliveryState` — the way to check whether an upload finished processing, and the " +
@@ -270,6 +276,7 @@ export const registerIapTools = (
   server.registerTool(
     "app_store_connect_get_iap_availability",
     {
+      title: "App Store Connect: Get IAP Availability",
       description:
         "Show which territories an in-app purchase is available in, and whether it opts into " +
         "territories Apple adds later. This is the fourth `MISSING_METADATA` requirement and the " +
@@ -312,6 +319,7 @@ export const registerIapTools = (
   server.registerTool(
     "app_store_connect_set_in_app_purchase_price",
     {
+      title: "App Store Connect: Set In-App Purchase Price",
       description:
         "Set what an in-app purchase costs, by pointing it at a price point from " +
         "app_store_connect_list_iap_price_points. Prices in every other territory are derived " +
@@ -400,6 +408,7 @@ export const registerIapTools = (
   server.registerTool(
     "app_store_connect_set_iap_availability",
     {
+      title: "App Store Connect: Set IAP Availability",
       description:
         "Choose the territories an in-app purchase sells in — the requirement that keeps an " +
         "otherwise-complete IAP at `MISSING_METADATA`. Omit `territories` to make it available " +
@@ -471,6 +480,7 @@ export const registerIapTools = (
   server.registerTool(
     "app_store_connect_update_in_app_purchase",
     {
+      title: "App Store Connect: Update In-App Purchase",
       description:
         "Update an in-app purchase's own attributes: reference name, review note, and Family " +
         "Sharing. Only the fields you pass are changed. `familySharable` is the one that cannot " +
@@ -523,6 +533,7 @@ export const registerIapTools = (
   server.registerTool(
     "app_store_connect_create_iap_localization",
     {
+      title: "App Store Connect: Create IAP Localization",
       description:
         "Add the customer-facing display name and description for one locale of an in-app " +
         "purchase — two of the three things Apple requires before an IAP can leave " +
@@ -569,6 +580,7 @@ export const registerIapTools = (
   server.registerTool(
     "app_store_connect_update_iap_localization",
     {
+      title: "App Store Connect: Update IAP Localization",
       description:
         "Change the display name or description of one existing in-app purchase locale. Only the " +
         "fields you pass are changed. Name is limited to 30 characters and description to 45.",
@@ -604,6 +616,7 @@ export const registerIapTools = (
   server.registerTool(
     "app_store_connect_delete_iap_localization",
     {
+      title: "App Store Connect: Delete IAP Localization",
       description:
         "Remove one locale's display name and description from an in-app purchase. Deleting the " +
         "last remaining locale puts the IAP back into `MISSING_METADATA` and blocks submission.",
@@ -620,6 +633,7 @@ export const registerIapTools = (
   server.registerTool(
     "app_store_connect_upload_iap_review_screenshot",
     {
+      title: "App Store Connect: Upload IAP Review Screenshot",
       description:
         "Attach the review screenshot an in-app purchase needs before it can be submitted — the " +
         "third `MISSING_METADATA` requirement alongside a display name and description. Runs the " +
@@ -722,6 +736,7 @@ export const registerIapTools = (
   server.registerTool(
     "app_store_connect_submit_in_app_purchase_for_review",
     {
+      title: "App Store Connect: Submit In-App Purchase for Review",
       description:
         "Submit an in-app purchase to Apple for review — for a SECOND or later one only. The " +
         "IAP must already be `READY_TO_SUBMIT`: a display name, a description, a price and a " +

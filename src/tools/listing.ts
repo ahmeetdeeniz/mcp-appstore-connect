@@ -49,6 +49,7 @@ export const registerListingTools = (
   server.registerTool(
     "app_store_connect_export_listing",
     {
+      title: "App Store Connect: Export Listing",
       description:
         "Export an app's complete App Store listing — name, subtitle, description, keywords, " +
         "what's-new, promotional text and URLs, for every locale — as a set of files you can " +
@@ -133,6 +134,7 @@ export const registerListingTools = (
   server.registerTool(
     "app_store_connect_apply_listing",
     {
+      title: "App Store Connect: Apply Listing",
       description:
         "Push an edited App Store listing back to App Store Connect. Pass the metadata files you " +
         `changed plus the tree's ${SIDECAR_BASENAME} — its location is what tells the server ` +

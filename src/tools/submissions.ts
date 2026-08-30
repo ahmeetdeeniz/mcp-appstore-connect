@@ -249,6 +249,7 @@ export const registerSubmissionTools = (
   server.registerTool(
     "app_store_connect_list_review_submissions",
     {
+      title: "App Store Connect: List Review Submissions",
       description:
         "List an app's App Store review submissions and their state (READY_FOR_REVIEW is a draft " +
         "not yet sent to Apple; WAITING_FOR_REVIEW and IN_REVIEW are with Apple). Each row " +
@@ -282,6 +283,7 @@ export const registerSubmissionTools = (
   server.registerTool(
     "app_store_connect_submit_version_for_review",
     {
+      title: "App Store Connect: Submit Version for Review",
       description:
         "Submit an App Store version to Apple for review — the final step of a release. Creates " +
         "(or reuses) the app's draft review submission, adds the version to it, and submits it. " +
@@ -545,6 +547,7 @@ export const registerSubmissionTools = (
   server.registerTool(
     "app_store_connect_remove_version_from_submission",
     {
+      title: "App Store Connect: Remove Version from Submission",
       description:
         "Take a version back off this app's un-submitted draft review submission, returning it " +
         "to PREPARE_FOR_SUBMISSION so its build and metadata can be changed again. " +
@@ -620,6 +623,7 @@ export const registerSubmissionTools = (
   server.registerTool(
     "app_store_connect_cancel_review_submission",
     {
+      title: "App Store Connect: Cancel Review Submission",
       description:
         "Withdraw a review submission from Apple, returning its versions to an editable state. " +
         "Only works while the submission is still with Apple and has not started completing; a " +

@@ -13,6 +13,7 @@ export const registerDeviceTools = (
   server.registerTool(
     "app_store_connect_list_devices",
     {
+      title: "App Store Connect: List Devices",
       description:
         "List devices registered on the developer account for development and ad-hoc " +
         "distribution (name, UDID, class, platform, enabled/disabled status).",
@@ -39,6 +40,7 @@ export const registerDeviceTools = (
   server.registerTool(
     "app_store_connect_register_device",
     {
+      title: "App Store Connect: Register Device",
       description:
         "Register a device by UDID so it can install development and ad-hoc builds. Apple does " +
         "not allow deleting devices — a wrong entry can only be disabled from the portal.",

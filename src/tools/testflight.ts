@@ -23,6 +23,7 @@ export const registerTestflightTools = (
   server.registerTool(
     "app_store_connect_list_beta_groups",
     {
+      title: "App Store Connect: List Beta Groups",
       description:
         "List an app's TestFlight beta groups (internal and external), with their public-link " +
         "state. Returns the group ids used to manage testers.",
@@ -40,6 +41,7 @@ export const registerTestflightTools = (
   server.registerTool(
     "app_store_connect_list_beta_testers",
     {
+      title: "App Store Connect: List Beta Testers",
       description:
         "List TestFlight beta testers. Scope to one group with `groupId`, or search all testers " +
         "by email. Returns each tester's id, email, name and invite state.",
@@ -63,6 +65,7 @@ export const registerTestflightTools = (
   server.registerTool(
     "app_store_connect_list_beta_feedback",
     {
+      title: "App Store Connect: List Beta Feedback",
       description:
         "List TestFlight beta feedback screenshot submissions for an app (tester comment, device " +
         "model, OS version, and screenshot asset links).",
@@ -85,6 +88,7 @@ export const registerTestflightTools = (
   server.registerTool(
     "app_store_connect_create_beta_group",
     {
+      title: "App Store Connect: Create Beta Group",
       description:
         "Create a TestFlight beta group for an app — the container builds are distributed " +
         "through. An app with no group has nowhere to send a build, so this is the first step " +
@@ -178,6 +182,7 @@ export const registerTestflightTools = (
   server.registerTool(
     "app_store_connect_invite_beta_tester",
     {
+      title: "App Store Connect: Invite Beta Tester",
       description:
         "Invite a new external TestFlight tester by email into a beta group. Sends them an " +
         "invitation. Use app_store_connect_add_tester_to_group for a tester that already exists.",
@@ -206,6 +211,7 @@ export const registerTestflightTools = (
   server.registerTool(
     "app_store_connect_add_tester_to_group",
     {
+      title: "App Store Connect: Add Tester to Group",
       description: "Add an existing beta tester to a beta group.",
       inputSchema: { groupId: groupIdArg, testerId: testerIdArg },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
@@ -222,6 +228,7 @@ export const registerTestflightTools = (
   server.registerTool(
     "app_store_connect_remove_tester_from_group",
     {
+      title: "App Store Connect: Remove Tester from Group",
       description:
         "Remove a beta tester from a beta group. They lose access to that group's builds.",
       inputSchema: { groupId: groupIdArg, testerId: testerIdArg, confirm: confirmArg },

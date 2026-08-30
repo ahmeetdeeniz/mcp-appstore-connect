@@ -13,6 +13,7 @@ export const registerUserTools = (
   server.registerTool(
     "app_store_connect_list_users",
     {
+      title: "App Store Connect: List Users",
       description:
         "List the team members on your App Store Connect account (username, name, roles, and " +
         "whether they can manage all apps or only some).",

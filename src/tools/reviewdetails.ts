@@ -119,6 +119,7 @@ export const registerReviewDetailTools = (
   server.registerTool(
     "app_store_connect_get_app_store_review_detail",
     {
+      title: "App Store Connect: Get App Store Review Detail",
       description:
         "Get the App Review Information attached to a version: the contact Apple reaches, the " +
         "demo account, and the reviewer notes. A null result means none exists, which blocks " +
@@ -152,6 +153,7 @@ export const registerReviewDetailTools = (
   server.registerTool(
     "app_store_connect_set_app_store_review_detail",
     {
+      title: "App Store Connect: Set App Store Review Detail",
       description:
         "Set the App Review Information for a version, creating it if this is the first time. " +
         "Required before submitting: a version with none is refused, and the error names a " +

@@ -13,6 +13,7 @@ export const registerAppTools = (
   server.registerTool(
     "app_store_connect_list_apps",
     {
+      title: "App Store Connect: List Apps",
       description:
         "List the apps on your App Store Connect account. Filter by bundle id, name, or SKU. " +
         "Returns each app's id (used by the version/build/testflight tools), name and bundleId.",
@@ -48,6 +49,7 @@ export const registerAppTools = (
   server.registerTool(
     "app_store_connect_get_app",
     {
+      title: "App Store Connect: Get App",
       description: "Get one app's full attributes by its App Store Connect id.",
       inputSchema: { appId: appIdArg, fields: fieldsArg },
       annotations: { readOnlyHint: true },
@@ -65,6 +67,7 @@ export const registerAppTools = (
   server.registerTool(
     "app_store_connect_update_app",
     {
+      title: "App Store Connect: Update App",
       description:
         "Update the app-level attributes that are not part of any one version. " +
         "`contentRightsDeclaration` is REQUIRED before a version can be submitted: Apple refuses " +

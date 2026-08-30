@@ -13,6 +13,7 @@ export const registerCustomerReviewTools = (
   server.registerTool(
     "app_store_connect_list_customer_reviews",
     {
+      title: "App Store Connect: List Customer Reviews",
       description:
         "List customer reviews for an app — star rating, title, body, nickname, territory and " +
         "date, newest first by default. Filter by rating to read just the 1-star complaints, or " +

@@ -12,6 +12,7 @@ export const registerStatusTool = (server: McpServer, config: Config): void => {
   server.registerTool(
     "app_store_connect_auth_status",
     {
+      title: "App Store Connect: Auth Status",
       description:
         "Report whether this server has working App Store Connect credentials, whether writes " +
         "are enabled, which vendor number is set and where it came from, and — when something " +
