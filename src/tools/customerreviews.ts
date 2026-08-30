@@ -1,4 +1,4 @@
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
 
 import type { AppStoreConnectClient } from "#/client/asc";
@@ -20,7 +20,7 @@ export const registerCustomerReviewTools = (
         "by territory to see whether a problem is local. Note these are written reviews only: " +
         "most people rate without writing, and Apple exposes no aggregate star average through " +
         "this API, so a distribution computed from these is directional, not the App Store rating.",
-      inputSchema: {
+      inputSchema: z.object({
         appId: appIdArg,
         rating: z
           .array(z.number().int().min(1).max(5))
@@ -39,7 +39,7 @@ export const registerCustomerReviewTools = (
               "for both.",
           ),
         limit: limitArg,
-      },
+      }),
       annotations: { readOnlyHint: true },
     },
     async ({ appId, rating, territory, sort, answered, limit }) =>

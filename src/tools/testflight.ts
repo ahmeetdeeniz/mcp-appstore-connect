@@ -1,4 +1,4 @@
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
 
 import type { AppStoreConnectClient } from "#/client/asc";
@@ -27,7 +27,7 @@ export const registerTestflightTools = (
       description:
         "List an app's TestFlight beta groups (internal and external), with their public-link " +
         "state. Returns the group ids used to manage testers.",
-      inputSchema: { appId: appIdArg, limit: limitArg },
+      inputSchema: z.object({ appId: appIdArg, limit: limitArg }),
       annotations: { readOnlyHint: true },
     },
     async ({ appId, limit }) =>
@@ -45,11 +45,11 @@ export const registerTestflightTools = (
       description:
         "List TestFlight beta testers. Scope to one group with `groupId`, or search all testers " +
         "by email. Returns each tester's id, email, name and invite state.",
-      inputSchema: {
+      inputSchema: z.object({
         groupId: z.string().optional().describe("Only testers in this beta group."),
         email: z.string().optional().describe("Filter by tester email."),
         limit: limitArg,
-      },
+      }),
       annotations: { readOnlyHint: true },
     },
     async ({ groupId, email, limit }) =>
@@ -69,7 +69,7 @@ export const registerTestflightTools = (
       description:
         "List TestFlight beta feedback screenshot submissions for an app (tester comment, device " +
         "model, OS version, and screenshot asset links).",
-      inputSchema: { appId: appIdArg, limit: limitArg },
+      inputSchema: z.object({ appId: appIdArg, limit: limitArg }),
       annotations: { readOnlyHint: true },
     },
     async ({ appId, limit }) =>
@@ -97,7 +97,7 @@ export const registerTestflightTools = (
         "(up to 100) and receive builds without Beta App Review, which makes " +
         "`hasAccessToAllBuilds` the quickest way to make existing builds installable. External " +
         "groups take anyone by email, and their first build needs review.",
-      inputSchema: {
+      inputSchema: z.object({
         appId: appIdArg,
         name: z
           .string()
@@ -131,7 +131,7 @@ export const registerTestflightTools = (
           .boolean()
           .optional()
           .describe("Let testers send feedback and screenshots from the TestFlight app."),
-      },
+      }),
       annotations: { readOnlyHint: false, destructiveHint: false },
     },
     async ({
@@ -186,12 +186,12 @@ export const registerTestflightTools = (
       description:
         "Invite a new external TestFlight tester by email into a beta group. Sends them an " +
         "invitation. Use app_store_connect_add_tester_to_group for a tester that already exists.",
-      inputSchema: {
+      inputSchema: z.object({
         groupId: groupIdArg,
         email: z.string().min(1).describe("The tester's email address."),
         firstName: z.string().optional(),
         lastName: z.string().optional(),
-      },
+      }),
       annotations: { readOnlyHint: false, destructiveHint: false },
     },
     async ({ groupId, email, firstName, lastName }) =>
@@ -213,7 +213,7 @@ export const registerTestflightTools = (
     {
       title: "App Store Connect: Add Tester to Group",
       description: "Add an existing beta tester to a beta group.",
-      inputSchema: { groupId: groupIdArg, testerId: testerIdArg },
+      inputSchema: z.object({ groupId: groupIdArg, testerId: testerIdArg }),
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
     },
     async ({ groupId, testerId }) =>
@@ -231,7 +231,7 @@ export const registerTestflightTools = (
       title: "App Store Connect: Remove Tester from Group",
       description:
         "Remove a beta tester from a beta group. They lose access to that group's builds.",
-      inputSchema: { groupId: groupIdArg, testerId: testerIdArg, confirm: confirmArg },
+      inputSchema: z.object({ groupId: groupIdArg, testerId: testerIdArg, confirm: confirmArg }),
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true },
     },
     async ({ groupId, testerId }) =>

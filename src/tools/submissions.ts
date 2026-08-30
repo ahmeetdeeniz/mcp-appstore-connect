@@ -1,4 +1,4 @@
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
 
 import type { AppStoreConnectClient } from "#/client/asc";
@@ -254,12 +254,12 @@ export const registerSubmissionTools = (
         "List an app's App Store review submissions and their state (READY_FOR_REVIEW is a draft " +
         "not yet sent to Apple; WAITING_FOR_REVIEW and IN_REVIEW are with Apple). Each row " +
         "carries the id of the version under review.",
-      inputSchema: {
+      inputSchema: z.object({
         appId: appIdArg,
         platform: z.enum(PLATFORMS).optional().describe("Filter by platform."),
         state: z.enum(SUBMISSION_STATES).optional().describe("Filter by submission state."),
         limit: limitArg,
-      },
+      }),
       annotations: { readOnlyHint: true },
     },
     async ({ appId, platform, state, limit }) =>
@@ -301,7 +301,7 @@ export const registerSubmissionTools = (
         "privacy — which is otherwise only visible by attempting a real submission. A dry run " +
         "of a draft does stage the version on it, which moves the version to READY_FOR_REVIEW; " +
         "calling again without dryRun finishes that same submission.",
-      inputSchema: { versionId: versionIdArg, dryRun: dryRunArg, confirm: confirmArg },
+      inputSchema: z.object({ versionId: versionIdArg, dryRun: dryRunArg, confirm: confirmArg }),
       annotations: { readOnlyHint: false, destructiveHint: false },
     },
     async ({ versionId, dryRun = false }) =>
@@ -561,7 +561,7 @@ export const registerSubmissionTools = (
         "Connect web UI. " +
         "Drafts only: a submission already handed to Apple is refused and named, since " +
         "withdrawing that one is cancel_review_submission's job.",
-      inputSchema: { versionId: versionIdArg, confirm: confirmArg },
+      inputSchema: z.object({ versionId: versionIdArg, confirm: confirmArg }),
       annotations: { readOnlyHint: false, destructiveHint: true },
     },
     async ({ versionId }) =>
@@ -632,7 +632,7 @@ export const registerSubmissionTools = (
         "yours to edit, and app_store_connect_submit_version_for_review sends it back without " +
         "losing the queue position or restarting the review of any in-app purchase attached " +
         "to it.",
-      inputSchema: { submissionId: submissionIdArg, confirm: confirmArg },
+      inputSchema: z.object({ submissionId: submissionIdArg, confirm: confirmArg }),
       annotations: { readOnlyHint: false, destructiveHint: true },
     },
     async ({ submissionId }) =>

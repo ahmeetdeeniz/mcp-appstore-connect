@@ -1,4 +1,4 @@
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
 
 import type { AppStoreConnectClient } from "#/client/asc";
@@ -208,7 +208,7 @@ export const registerVersionTools = (
       description:
         "List an app's App Store versions (each versionString and its review state, e.g. " +
         "PREPARE_FOR_SUBMISSION, WAITING_FOR_REVIEW, READY_FOR_SALE).",
-      inputSchema: {
+      inputSchema: z.object({
         appId: appIdArg,
         platform: z.enum(PLATFORMS).optional().describe("Filter by platform."),
         appStoreState: z
@@ -217,7 +217,7 @@ export const registerVersionTools = (
           .describe('Filter by review state, e.g. "READY_FOR_SALE".'),
         versionString: z.string().optional().describe('Filter to one version, e.g. "1.2.0".'),
         limit: limitArg,
-      },
+      }),
       annotations: { readOnlyHint: true },
     },
     async ({ appId, platform, appStoreState, versionString, limit }) =>
@@ -246,7 +246,7 @@ export const registerVersionTools = (
         "returns attributes only, so the build link is invisible there. Use it before submitting: " +
         "a version whose build predates your latest work ships that older binary, and the build's " +
         "uploadedDate is what tells you. `build` is null when nothing is attached yet.",
-      inputSchema: { versionId: versionIdArg },
+      inputSchema: z.object({ versionId: versionIdArg }),
       annotations: { readOnlyHint: true },
     },
     async ({ versionId }) =>
@@ -281,7 +281,7 @@ export const registerVersionTools = (
       description:
         "List the per-locale metadata rows for one App Store version (each carries description, " +
         "keywords, what's-new, promotional text). Returns the localization ids you update.",
-      inputSchema: { versionId: versionIdArg, limit: limitArg },
+      inputSchema: z.object({ versionId: versionIdArg, limit: limitArg }),
       annotations: { readOnlyHint: true },
     },
     async ({ versionId, limit }) =>
@@ -301,7 +301,7 @@ export const registerVersionTools = (
       title: "App Store Connect: Get Version Localization",
       description:
         "Get one locale's full App Store metadata (description, keywords, what's-new, …).",
-      inputSchema: { localizationId: localizationIdArg },
+      inputSchema: z.object({ localizationId: localizationIdArg }),
       annotations: { readOnlyHint: true },
     },
     async ({ localizationId }) =>
@@ -321,7 +321,7 @@ export const registerVersionTools = (
         "begins in PREPARE_FOR_SUBMISSION; attach a build with " +
         "app_store_connect_set_version_build, then hand it to Apple with " +
         "app_store_connect_submit_version_for_review.",
-      inputSchema: {
+      inputSchema: z.object({
         appId: appIdArg,
         versionString: z.string().min(1).describe('The new version number, e.g. "1.3.0".'),
         platform: z.enum(PLATFORMS).default("IOS").describe("Platform for the version."),
@@ -329,7 +329,7 @@ export const registerVersionTools = (
           .optional()
           .describe(`${RELEASE_TYPE_DESCRIPTION} Defaults to Apple's AFTER_APPROVAL.`),
         earliestReleaseDate: earliestReleaseDateArg.optional(),
-      },
+      }),
       annotations: { readOnlyHint: false, destructiveHint: false },
     },
     async ({ appId, versionString, platform, releaseType, earliestReleaseDate }) =>
@@ -359,13 +359,13 @@ export const registerVersionTools = (
         "sets its copyright. Only the fields you pass are changed. The version must still be " +
         "PREPARE_FOR_SUBMISSION or DEVELOPER_REJECTED. To change a version's build instead, use " +
         "app_store_connect_set_version_build.",
-      inputSchema: {
+      inputSchema: z.object({
         versionId: versionIdArg,
         releaseType: releaseTypeArg.optional(),
         earliestReleaseDate: earliestReleaseDateArg.optional(),
         versionString: z.string().min(1).optional().describe('Rename the version, e.g. "1.3.0".'),
         copyright: z.string().optional().describe('Copyright line, e.g. "2026 Acme Inc.".'),
-      },
+      }),
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
     },
     async ({ versionId, ...attrs }) =>
@@ -397,7 +397,7 @@ export const registerVersionTools = (
         "Update the App Store metadata for one locale of a version: description, keywords, " +
         "what's-new (release notes), promotional text, marketing/support URLs. Only the fields " +
         "you pass are changed. Keywords are a single comma-separated string (100-char limit).",
-      inputSchema: {
+      inputSchema: z.object({
         localizationId: localizationIdArg,
         description: z
           .string()
@@ -417,7 +417,7 @@ export const registerVersionTools = (
           .describe("Promotional text, editable without a new build (170-char limit)."),
         marketingUrl: z.string().optional(),
         supportUrl: z.string().optional(),
-      },
+      }),
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
     },
     async ({ localizationId, ...attrs }) =>
@@ -443,7 +443,7 @@ export const registerVersionTools = (
         "true instead of a buildId to remove the currently attached build. The version must be " +
         "PREPARE_FOR_SUBMISSION or DEVELOPER_REJECTED, and the build must be VALID, unexpired, " +
         "and belong to the same app and version string.",
-      inputSchema: {
+      inputSchema: z.object({
         versionId: versionIdArg,
         buildId: z
           .string()
@@ -456,7 +456,7 @@ export const registerVersionTools = (
           .boolean()
           .optional()
           .describe("Remove the currently attached build instead of setting one. Omit buildId."),
-      },
+      }),
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
     },
     async ({ versionId, buildId, detach }) =>
@@ -506,7 +506,7 @@ export const registerVersionTools = (
         "'Release This Version' button. Use this after Apple approves a version created with " +
         "releaseType MANUAL; it puts the version on the App Store for customers. This cannot be " +
         "undone: a released version can only be pulled by removing the app from sale.",
-      inputSchema: { versionId: versionIdArg, confirm: confirmArg },
+      inputSchema: z.object({ versionId: versionIdArg, confirm: confirmArg }),
       annotations: { readOnlyHint: false, destructiveHint: true },
     },
     async ({ versionId }) =>

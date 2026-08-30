@@ -1,4 +1,4 @@
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
 
 import type { AppStoreConnectClient } from "#/client/asc";
@@ -17,11 +17,11 @@ export const registerDeviceTools = (
       description:
         "List devices registered on the developer account for development and ad-hoc " +
         "distribution (name, UDID, class, platform, enabled/disabled status).",
-      inputSchema: {
+      inputSchema: z.object({
         status: z.enum(["ENABLED", "DISABLED"]).optional().describe("Filter by device status."),
         platform: z.enum(["IOS", "MAC_OS"]).optional().describe("Filter by platform."),
         limit: limitArg,
-      },
+      }),
       annotations: { readOnlyHint: true },
     },
     async ({ status, platform, limit }) =>
@@ -44,11 +44,11 @@ export const registerDeviceTools = (
       description:
         "Register a device by UDID so it can install development and ad-hoc builds. Apple does " +
         "not allow deleting devices — a wrong entry can only be disabled from the portal.",
-      inputSchema: {
+      inputSchema: z.object({
         name: z.string().min(1).describe("A label for the device."),
         udid: z.string().min(1).describe("The device UDID (40-char hex, or newer 25-char form)."),
         platform: z.enum(["IOS", "MAC_OS"]).default("IOS"),
-      },
+      }),
       annotations: { readOnlyHint: false, destructiveHint: false },
     },
     async ({ name, udid, platform }) =>

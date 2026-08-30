@@ -1,4 +1,4 @@
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
 
 import type { AppStoreConnectClient } from "#/client/asc";
@@ -124,7 +124,7 @@ export const registerReviewDetailTools = (
         "Get the App Review Information attached to a version: the contact Apple reaches, the " +
         "demo account, and the reviewer notes. A null result means none exists, which blocks " +
         "submission — this is the check for the 'appStoreReviewDetail … was not found' error.",
-      inputSchema: { versionId: versionIdArg },
+      inputSchema: z.object({ versionId: versionIdArg }),
       annotations: { readOnlyHint: true },
     },
     async ({ versionId }) =>
@@ -162,7 +162,7 @@ export const registerReviewDetailTools = (
         "has a question, so it must be a real person who will answer — omit the contact " +
         "fields to use the one configured in config.json, which only fills what the record " +
         "is missing and reports any value that disagrees with it.",
-      inputSchema: { versionId: versionIdArg, ...reviewDetailFields },
+      inputSchema: z.object({ versionId: versionIdArg, ...reviewDetailFields }),
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
     },
     async ({ versionId, ...attributes }) =>

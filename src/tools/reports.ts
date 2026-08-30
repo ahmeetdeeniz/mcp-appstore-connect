@@ -1,7 +1,7 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute } from "node:path";
 
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
 
 import type { AppStoreConnectClient } from "#/client/asc";
@@ -680,7 +680,7 @@ export const registerReportTools = (
         "and verifies it. When none is configured it returns the two places to find one rather " +
         "than failing. Start here when a report tool errors, or when you need to know which " +
         "account the report numbers cover.",
-      inputSchema: {
+      inputSchema: z.object({
         vendorNumber: z
           .string()
           .optional()
@@ -692,7 +692,7 @@ export const registerReportTools = (
             "Download one throwaway daily report to confirm Apple accepts the number. " +
               "Set false to read the configuration without calling Apple.",
           ),
-      },
+      }),
       annotations: { readOnlyHint: true },
     },
     async ({ vendorNumber, verify }) =>
@@ -754,7 +754,7 @@ export const registerReportTools = (
         "more than one Apple Identifier. Units mix first-time downloads with free updates (see " +
         "Product Type Identifier), and Developer Proceeds / Customer Price are per unit, not " +
         "per row. A period with no rows comes back as a 404.",
-      inputSchema: {
+      inputSchema: z.object({
         reportDate: z
           .string()
           .min(1)
@@ -806,7 +806,7 @@ export const registerReportTools = (
               "file written by savePath.",
           ),
         savePath: savePathArg,
-      },
+      }),
       annotations: { readOnlyHint: true },
     },
     async ({
@@ -871,7 +871,7 @@ export const registerReportTools = (
         "because a well-formed report comes back either way, so read the returned `coverage` " +
         "start and end dates before quoting any number from it. A period with no rows, or one " +
         "Apple has not published yet, comes back as a 404.",
-      inputSchema: {
+      inputSchema: z.object({
         reportDate: z
           .string()
           .min(1)
@@ -899,7 +899,7 @@ export const registerReportTools = (
               "file written by savePath.",
           ),
         savePath: savePathArg,
-      },
+      }),
       annotations: { readOnlyHint: true },
     },
     async ({ reportDate, regionCode, vendorNumber, maxLines, savePath }) =>
@@ -948,14 +948,14 @@ export const registerReportTools = (
         "rather than creating a second one (Apple rejects a duplicate ONGOING request). Then: " +
         "list_analytics_reports -> list_analytics_report_instances -> " +
         "download_analytics_report_segment.",
-      inputSchema: {
+      inputSchema: z.object({
         appId: appIdArg,
         accessType: z
           .enum(["ONE_TIME_SNAPSHOT", "ONGOING"])
           .optional()
           .describe("Filter by access type. Omit to list both."),
         limit: limitArg,
-      },
+      }),
       annotations: { readOnlyHint: true },
     },
     async ({ appId, accessType, limit }) =>
@@ -979,7 +979,7 @@ export const registerReportTools = (
         "carries no data itself: pass its id to app_store_connect_list_analytics_report_instances " +
         "to reach the dated instances holding the numbers. An empty list means Apple has not " +
         "finished generating them yet (allow a day or two after creating the request).",
-      inputSchema: {
+      inputSchema: z.object({
         reportRequestId: z
           .string()
           .min(1)
@@ -999,7 +999,7 @@ export const registerReportTools = (
           .optional()
           .describe('Filter by exact report name, e.g. "App Store Installation and Deletion".'),
         limit: limitArg,
-      },
+      }),
       annotations: { readOnlyHint: true },
     },
     async ({ reportRequestId, category, name, limit }) =>
@@ -1023,7 +1023,7 @@ export const registerReportTools = (
         "app_store_connect_download_analytics_report_segment to get the actual rows. Filter by " +
         "granularity first: a report usually has one instance per day, so an unfiltered list is " +
         "mostly noise.",
-      inputSchema: {
+      inputSchema: z.object({
         reportId: z
           .string()
           .min(1)
@@ -1037,7 +1037,7 @@ export const registerReportTools = (
           .optional()
           .describe("Filter to one processing date, as YYYY-MM-DD."),
         limit: limitArg,
-      },
+      }),
       annotations: { readOnlyHint: true },
     },
     async ({ reportId, granularity, processingDate, limit }) =>
@@ -1064,7 +1064,7 @@ export const registerReportTools = (
         "with their compressed size and checksum. Use this to see how large a download will be; " +
         "app_store_connect_download_analytics_report_segment fetches one. The `url` on a segment " +
         "expires within minutes, so re-list rather than reusing an old one.",
-      inputSchema: {
+      inputSchema: z.object({
         instanceId: z
           .string()
           .min(1)
@@ -1073,7 +1073,7 @@ export const registerReportTools = (
               "app_store_connect_list_analytics_report_instances.",
           ),
         limit: limitArg,
-      },
+      }),
       annotations: { readOnlyHint: true },
     },
     async ({ instanceId, limit }) =>
@@ -1097,7 +1097,7 @@ export const registerReportTools = (
         "installs, deletions, sessions, retention, proceeds — depending on which report the " +
         "instance belongs to. Resolves the instance's segments itself, so no expiring url has to " +
         "be passed around. A report split across several segments needs one call per segmentIndex.",
-      inputSchema: {
+      inputSchema: z.object({
         instanceId: z
           .string()
           .min(1)
@@ -1131,7 +1131,7 @@ export const registerReportTools = (
               "Defaults to 25 MiB.",
           ),
         savePath: savePathArg,
-      },
+      }),
       annotations: { readOnlyHint: true },
     },
     async ({ instanceId, segmentIndex, maxLines, maxBytes, savePath }) =>
@@ -1204,7 +1204,7 @@ export const registerReportTools = (
         "app_store_connect_download_analytics_report_segment and look. " +
         "FRAMEWORK_USAGE reports are excluded by default — they are the bulk of the catalogue " +
         "and almost never what a product question is about.",
-      inputSchema: {
+      inputSchema: z.object({
         appId: appIdArg,
         category: z
           .enum(REPORT_CATEGORIES)
@@ -1230,7 +1230,7 @@ export const registerReportTools = (
               "is found or every report has been checked — so a zero is never a floor, which " +
               'is what makes this tool answerable for "is there any data yet".',
           ),
-      },
+      }),
       annotations: { readOnlyHint: true },
     },
     async ({ appId, category, includeFrameworkUsage, maxReportsProbed }) =>
@@ -1394,10 +1394,10 @@ export const registerReportTools = (
         "it. ONGOING starts collecting from now and backfills nothing. Creating only ONGOING " +
         "therefore silently forfeits the app's entire past, and the loss is invisible — next " +
         "month looks healthy because it has data, while the year before it no longer exists.",
-      inputSchema: {
+      inputSchema: z.object({
         appId: appIdArg,
         accessType: z.enum(["ONE_TIME_SNAPSHOT", "ONGOING"]).default("ONGOING"),
-      },
+      }),
       annotations: { readOnlyHint: false, destructiveHint: false },
     },
     async ({ appId, accessType }) =>

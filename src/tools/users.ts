@@ -1,4 +1,4 @@
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
 
 import type { AppStoreConnectClient } from "#/client/asc";
@@ -17,10 +17,10 @@ export const registerUserTools = (
       description:
         "List the team members on your App Store Connect account (username, name, roles, and " +
         "whether they can manage all apps or only some).",
-      inputSchema: {
+      inputSchema: z.object({
         username: z.string().optional().describe("Filter by username (Apple ID email)."),
         limit: limitArg,
-      },
+      }),
       annotations: { readOnlyHint: true },
     },
     async ({ username, limit }) =>

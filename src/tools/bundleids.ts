@@ -1,4 +1,4 @@
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
 
 import type { AppStoreConnectClient } from "#/client/asc";
@@ -26,11 +26,11 @@ export const registerBundleIdTools = (
       description:
         "List registered bundle ids (App IDs) on the developer account, with their identifier " +
         "string, name and platform. Returns the resource ids used to manage capabilities.",
-      inputSchema: {
+      inputSchema: z.object({
         identifier: z.string().optional().describe('Filter by identifier, e.g. "com.acme.app".'),
         platform: z.enum(BUNDLE_PLATFORMS).optional().describe("Filter by platform."),
         limit: limitArg,
-      },
+      }),
       annotations: { readOnlyHint: true },
     },
     async ({ identifier, platform, limit }) =>
@@ -53,7 +53,7 @@ export const registerBundleIdTools = (
     {
       title: "App Store Connect: Get Bundle ID",
       description: "Get one bundle id's attributes by its resource id.",
-      inputSchema: { bundleId: bundleIdArg },
+      inputSchema: z.object({ bundleId: bundleIdArg }),
       annotations: { readOnlyHint: true },
     },
     async ({ bundleId }) =>
@@ -69,12 +69,12 @@ export const registerBundleIdTools = (
       description:
         "Register a new bundle id (App ID) on the developer account. The identifier is permanent " +
         "and cannot be reused once created.",
-      inputSchema: {
+      inputSchema: z.object({
         identifier: z.string().min(1).describe('The bundle id, e.g. "com.acme.app".'),
         name: z.string().min(1).describe("A human-readable name for the App ID."),
         platform: z.enum(BUNDLE_PLATFORMS).default("UNIVERSAL"),
         seedId: z.string().optional().describe("Team seed id (App ID prefix). Usually inferred."),
-      },
+      }),
       annotations: { readOnlyHint: false, destructiveHint: false },
     },
     async ({ identifier, name, platform, seedId }) =>
@@ -97,7 +97,7 @@ export const registerBundleIdTools = (
       description:
         "Enable a capability (App Service) on a bundle id, e.g. PUSH_NOTIFICATIONS, ICLOUD, " +
         "GAME_CENTER, ASSOCIATED_DOMAINS, APP_GROUPS.",
-      inputSchema: {
+      inputSchema: z.object({
         bundleId: bundleIdArg,
         capabilityType: z
           .string()
@@ -107,7 +107,7 @@ export const registerBundleIdTools = (
           .array(z.record(z.string(), z.unknown()))
           .optional()
           .describe("Optional capability settings (JSON:API CapabilitySetting objects)."),
-      },
+      }),
       annotations: { readOnlyHint: false, destructiveHint: false },
     },
     async ({ bundleId, capabilityType, settings }) =>
@@ -129,13 +129,13 @@ export const registerBundleIdTools = (
     {
       title: "App Store Connect: Disable Capability",
       description: "Disable a capability on a bundle id by its capability id.",
-      inputSchema: {
+      inputSchema: z.object({
         capabilityId: z
           .string()
           .min(1)
           .describe("The bundleIdCapability id (returned when the capability was enabled)."),
         confirm: confirmArg,
-      },
+      }),
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true },
     },
     async ({ capabilityId }) =>

@@ -1,4 +1,4 @@
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
 
 import type { AppStoreConnectClient } from "#/client/asc";
@@ -68,13 +68,13 @@ export const registerCategoryTools = (
         "Returns the appCategories ids that app_store_connect_set_app_categories takes. " +
         "Categories are platform-specific — Developer Tools exists on macOS and not on iOS — so " +
         "filter by the platform you are submitting for rather than assuming a shared list.",
-      inputSchema: {
+      inputSchema: z.object({
         platform: z
           .enum(PLATFORMS)
           .optional()
           .describe("Only categories available on this platform."),
         limit: limitArg,
-      },
+      }),
       annotations: { readOnlyHint: true },
     },
     async ({ platform, limit }) =>
@@ -124,7 +124,7 @@ export const registerCategoryTools = (
         "the appInfo and names nothing else. Only the categories you pass are changed. " +
         "Subcategories are optional and only some categories accept them (Games most notably). " +
         "This is version-independent — set it once, not per release.",
-      inputSchema: {
+      inputSchema: z.object({
         appInfoId: appInfoIdArg,
         primaryCategory: categoryArg("The app's main category"),
         primarySubcategoryOne: clearableCategoryArg("First subcategory of the primary category"),
@@ -136,7 +136,7 @@ export const registerCategoryTools = (
         secondarySubcategoryTwo: clearableCategoryArg(
           "Second subcategory of the secondary category",
         ),
-      },
+      }),
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
     },
     async ({

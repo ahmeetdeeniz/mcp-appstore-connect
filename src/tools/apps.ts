@@ -1,4 +1,4 @@
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
 
 import type { AppStoreConnectClient } from "#/client/asc";
@@ -17,7 +17,7 @@ export const registerAppTools = (
       description:
         "List the apps on your App Store Connect account. Filter by bundle id, name, or SKU. " +
         "Returns each app's id (used by the version/build/testflight tools), name and bundleId.",
-      inputSchema: {
+      inputSchema: z.object({
         bundleId: z
           .string()
           .optional()
@@ -26,7 +26,7 @@ export const registerAppTools = (
         sku: z.string().optional().describe("Filter by SKU."),
         limit: limitArg,
         fields: fieldsArg,
-      },
+      }),
       annotations: { readOnlyHint: true },
     },
     async ({ bundleId, name, sku, limit, fields }) =>
@@ -51,7 +51,7 @@ export const registerAppTools = (
     {
       title: "App Store Connect: Get App",
       description: "Get one app's full attributes by its App Store Connect id.",
-      inputSchema: { appId: appIdArg, fields: fieldsArg },
+      inputSchema: z.object({ appId: appIdArg, fields: fieldsArg }),
       annotations: { readOnlyHint: true },
     },
     async ({ appId, fields }) =>
@@ -75,7 +75,7 @@ export const registerAppTools = (
         "else. Answer it from what the shipped binary does — an app that downloads models, " +
         "fonts, or media it did not author uses third-party content, and declaring otherwise to " +
         "clear the gate is a false statement to Apple. Only the fields you pass are changed.",
-      inputSchema: {
+      inputSchema: z.object({
         appId: appIdArg,
         contentRightsDeclaration: z
           .enum(["DOES_NOT_USE_THIRD_PARTY_CONTENT", "USES_THIRD_PARTY_CONTENT"])
@@ -98,7 +98,7 @@ export const registerAppTools = (
           .enum(["V1", "V2"])
           .optional()
           .describe("Payload version for the subscription status URL."),
-      },
+      }),
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
     },
     async ({ appId, ...attributes }) =>

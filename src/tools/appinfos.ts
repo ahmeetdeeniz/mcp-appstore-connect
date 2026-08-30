@@ -1,4 +1,4 @@
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
 
 import type { AppStoreConnectClient } from "#/client/asc";
@@ -60,7 +60,7 @@ export const registerAppInfoTools = (
         "List an app's appInfo records, which hold the version-independent listing: name, " +
         "subtitle, privacy policy, categories and age rating. An app usually has two — the live " +
         "one (READY_FOR_SALE) and the editable one — so check `appStoreState` before updating.",
-      inputSchema: { appId: appIdArg, limit: limitArg },
+      inputSchema: z.object({ appId: appIdArg, limit: limitArg }),
       annotations: { readOnlyHint: true },
     },
     async ({ appId, limit }) =>
@@ -81,7 +81,7 @@ export const registerAppInfoTools = (
       description:
         "List the per-locale name, subtitle and privacy policy for one appInfo. Returns the " +
         "localization ids you update.",
-      inputSchema: { appInfoId: appInfoIdArg, limit: limitArg },
+      inputSchema: z.object({ appInfoId: appInfoIdArg, limit: limitArg }),
       annotations: { readOnlyHint: true },
     },
     async ({ appInfoId, limit }) =>
@@ -97,7 +97,7 @@ export const registerAppInfoTools = (
     {
       title: "App Store Connect: Get App Info Localization",
       description: "Get one locale's name, subtitle and privacy policy fields.",
-      inputSchema: { localizationId: appInfoLocalizationIdArg },
+      inputSchema: z.object({ localizationId: appInfoLocalizationIdArg }),
       annotations: { readOnlyHint: true },
     },
     async ({ localizationId }) =>
@@ -115,7 +115,7 @@ export const registerAppInfoTools = (
         "rating, including `socialMedia`, `userGeneratedContent` and `messagingAndChat`. Returns " +
         "the declaration id that app_store_connect_update_age_rating_declaration takes. Note the " +
         "declaration is version-independent: there is one per appInfo, not one per release.",
-      inputSchema: { appInfoId: appInfoIdArg },
+      inputSchema: z.object({ appInfoId: appInfoIdArg }),
       annotations: { readOnlyHint: true },
     },
     async ({ appInfoId }) =>
@@ -136,7 +136,7 @@ export const registerAppInfoTools = (
         "public rating from these answers, so a wrong value can change the app's rating or its " +
         "availability in a territory. From September 2026 `socialMedia` must be answered before " +
         "Apple accepts a new version, an update, or a notarization request.",
-      inputSchema: {
+      inputSchema: z.object({
         declarationId: ageRatingDeclarationIdArg,
 
         // Time Allowance / social — the September 2026 requirement.
@@ -198,7 +198,7 @@ export const registerAppInfoTools = (
           .string()
           .optional()
           .describe("URL explaining the developer's own age rating information."),
-      },
+      }),
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
     },
     async ({ declarationId, ...attributes }) =>
@@ -223,7 +223,7 @@ export const registerAppInfoTools = (
         "Update the version-independent listing fields for one locale: app name (30 chars), " +
         "subtitle (30 chars) and privacy policy. Only the fields you pass are changed. Apple " +
         "rejects a name change once the version is in review.",
-      inputSchema: {
+      inputSchema: z.object({
         localizationId: appInfoLocalizationIdArg,
         name: z.string().optional().describe("The app name as shown on the store (30-char limit)."),
         subtitle: z
@@ -239,7 +239,7 @@ export const registerAppInfoTools = (
           .string()
           .optional()
           .describe("URL where users manage their privacy choices."),
-      },
+      }),
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
     },
     async ({ localizationId, ...attributes }) =>

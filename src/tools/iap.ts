@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
 
 import type { AppStoreConnectClient, UploadOperation } from "#/client/asc";
@@ -114,7 +114,7 @@ export const registerIapTools = (
         "List an app's in-app purchases (name, productId, type, review state). Returns the " +
         "inAppPurchase ids the pricing tools take. Covers one-time purchases only — " +
         "auto-renewable subscriptions live under subscription groups and are not exposed here.",
-      inputSchema: {
+      inputSchema: z.object({
         appId: appIdArg,
         productId: z.string().optional().describe('Filter by productId, e.g. "com.acme.app.pro".'),
         name: z.string().optional().describe("Filter by display name."),
@@ -124,7 +124,7 @@ export const registerIapTools = (
           .optional()
           .describe('Filter by review state, e.g. "APPROVED", "READY_TO_SUBMIT".'),
         limit: limitArg,
-      },
+      }),
       annotations: { readOnlyHint: true },
     },
     async ({ appId, productId, name, inAppPurchaseType, state, limit }) =>
@@ -149,7 +149,7 @@ export const registerIapTools = (
     {
       title: "App Store Connect: Get In-App Purchase",
       description: "Get one in-app purchase's attributes by its resource id.",
-      inputSchema: { inAppPurchaseId: inAppPurchaseIdArg },
+      inputSchema: z.object({ inAppPurchaseId: inAppPurchaseIdArg }),
       annotations: { readOnlyHint: true },
     },
     async ({ inAppPurchaseId }) =>
@@ -168,11 +168,11 @@ export const registerIapTools = (
         "pass the id of the row you want to app_store_connect_set_in_app_purchase_price. Apple " +
         "publishes hundreds per territory, so filter or raise the limit when hunting a " +
         "specific price.",
-      inputSchema: {
+      inputSchema: z.object({
         inAppPurchaseId: inAppPurchaseIdArg,
         territory: territoryArg,
         limit: limitArg,
-      },
+      }),
       annotations: { readOnlyHint: true },
     },
     async ({ inAppPurchaseId, territory, limit }) =>
@@ -194,7 +194,7 @@ export const registerIapTools = (
         "Show what an in-app purchase currently costs: its base territory and every manual price " +
         "in force, each with its territory, its customerPrice and proceeds, and its start/end " +
         "date. An empty price list means the IAP has never been priced.",
-      inputSchema: { inAppPurchaseId: inAppPurchaseIdArg },
+      inputSchema: z.object({ inAppPurchaseId: inAppPurchaseIdArg }),
       annotations: { readOnlyHint: true },
     },
     async ({ inAppPurchaseId }) =>
@@ -239,7 +239,7 @@ export const registerIapTools = (
         "the localization ids the update and delete tools take. An IAP stuck at " +
         "`MISSING_METADATA` is usually missing these: Apple requires a display name, a " +
         "description and a review screenshot before it can be submitted.",
-      inputSchema: { inAppPurchaseId: inAppPurchaseIdArg, limit: limitArg },
+      inputSchema: z.object({ inAppPurchaseId: inAppPurchaseIdArg, limit: limitArg }),
       annotations: { readOnlyHint: true },
     },
     async ({ inAppPurchaseId, limit }) =>
@@ -262,7 +262,7 @@ export const registerIapTools = (
         "`assetDeliveryState` — the way to check whether an upload finished processing, and the " +
         "third thing Apple requires before an IAP leaves `MISSING_METADATA`. Returns nothing when " +
         "no screenshot has been attached.",
-      inputSchema: { inAppPurchaseId: inAppPurchaseIdArg },
+      inputSchema: z.object({ inAppPurchaseId: inAppPurchaseIdArg }),
       annotations: { readOnlyHint: true },
     },
     async ({ inAppPurchaseId }) =>
@@ -283,7 +283,7 @@ export const registerIapTools = (
         "easiest to miss: a name, a description, a price and a review screenshot can all be in " +
         "place and the IAP still will not become READY_TO_SUBMIT without it. `data: null` means " +
         "availability has never been set — use app_store_connect_set_iap_availability.",
-      inputSchema: { inAppPurchaseId: inAppPurchaseIdArg, limit: limitArg },
+      inputSchema: z.object({ inAppPurchaseId: inAppPurchaseIdArg, limit: limitArg }),
       annotations: { readOnlyHint: true },
     },
     async ({ inAppPurchaseId, limit }) =>
@@ -327,7 +327,7 @@ export const registerIapTools = (
         "the IAP's whole price schedule — any manual price already set is dropped — and once " +
         "the start date arrives it changes what real customers are charged. Omit startDate to " +
         "price it immediately.",
-      inputSchema: {
+      inputSchema: z.object({
         inAppPurchaseId: inAppPurchaseIdArg,
         pricePointId: z
           .string()
@@ -352,7 +352,7 @@ export const registerIapTools = (
           .optional()
           .describe('Date the price stops applying, "YYYY-MM-DD". Omit to leave it open-ended.'),
         confirm: confirmArg,
-      },
+      }),
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true },
     },
     async ({ inAppPurchaseId, pricePointId, baseTerritory, startDate, endDate }) =>
@@ -416,7 +416,7 @@ export const registerIapTools = (
         "and what almost every one-time unlock wants. Availability can only be created once per " +
         "IAP; Apple rejects a second POST, so treat this as a first-time setup rather than an " +
         "edit.",
-      inputSchema: {
+      inputSchema: z.object({
         inAppPurchaseId: inAppPurchaseIdArg,
         territories: z
           .array(z.string().length(3))
@@ -433,7 +433,7 @@ export const registerIapTools = (
               "this false means a new App Store region silently cannot buy it.",
           ),
         confirm: confirmArg,
-      },
+      }),
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
     },
     async ({ inAppPurchaseId, territories, availableInNewTerritories }) =>
@@ -488,7 +488,7 @@ export const registerIapTools = (
         "takeback from customers who already bought it, so Apple treats it as one-way in " +
         "practice. `name` here is the internal reference name, NOT what customers see: that is " +
         "the per-locale display name, set with app_store_connect_create_iap_localization.",
-      inputSchema: {
+      inputSchema: z.object({
         inAppPurchaseId: inAppPurchaseIdArg,
         name: z
           .string()
@@ -512,7 +512,7 @@ export const registerIapTools = (
               "disabling it after customers have bought is a takeback.",
           ),
         confirm: confirmArg,
-      },
+      }),
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
     },
     async ({ inAppPurchaseId, confirm: _confirm, ...attributes }) =>
@@ -541,7 +541,7 @@ export const registerIapTools = (
         "the app's own listing: 30 characters for the name, 45 for the description. Use " +
         "app_store_connect_update_iap_localization to change a locale that already exists; " +
         "creating a duplicate locale is rejected.",
-      inputSchema: {
+      inputSchema: z.object({
         inAppPurchaseId: inAppPurchaseIdArg,
         locale: z
           .string()
@@ -555,7 +555,7 @@ export const registerIapTools = (
           .optional()
           .describe("What the purchase unlocks, shown to customers (45-char limit)."),
         confirm: confirmArg,
-      },
+      }),
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
     },
     async ({ inAppPurchaseId, locale, name, description }) =>
@@ -584,7 +584,7 @@ export const registerIapTools = (
       description:
         "Change the display name or description of one existing in-app purchase locale. Only the " +
         "fields you pass are changed. Name is limited to 30 characters and description to 45.",
-      inputSchema: {
+      inputSchema: z.object({
         localizationId: iapLocalizationIdArg,
         name: z
           .string()
@@ -595,7 +595,7 @@ export const registerIapTools = (
           .optional()
           .describe("What the purchase unlocks, shown to customers (45-char limit)."),
         confirm: confirmArg,
-      },
+      }),
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
     },
     async ({ localizationId, confirm: _confirm, ...attributes }) =>
@@ -620,7 +620,7 @@ export const registerIapTools = (
       description:
         "Remove one locale's display name and description from an in-app purchase. Deleting the " +
         "last remaining locale puts the IAP back into `MISSING_METADATA` and blocks submission.",
-      inputSchema: { localizationId: iapLocalizationIdArg, confirm: confirmArg },
+      inputSchema: z.object({ localizationId: iapLocalizationIdArg, confirm: confirmArg }),
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true },
     },
     async ({ localizationId }) =>
@@ -640,7 +640,7 @@ export const registerIapTools = (
         "whole flow: reserves the asset, uploads the bytes, commits the checksum, then waits for " +
         "processing. This is shown to App Review only, never to customers, and an IAP holds " +
         "exactly one: uploading again replaces it.",
-      inputSchema: {
+      inputSchema: z.object({
         inAppPurchaseId: inAppPurchaseIdArg,
         filePath: z
           .string()
@@ -675,7 +675,7 @@ export const registerIapTools = (
               "failure — the upload has already succeeded at that point.",
           ),
         confirm: confirmArg,
-      },
+      }),
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false },
     },
     async ({ inAppPurchaseId, filePath, fileData, fileName, waitSeconds }) =>
@@ -753,7 +753,7 @@ export const registerIapTools = (
         "ships an app whose paywall sells a product Apple never approved. Do that one in the " +
         "App Store Connect web UI: the version page's **Add for Review** panel lists the IAP " +
         "beside the version; add both, then submit.",
-      inputSchema: { inAppPurchaseId: inAppPurchaseIdArg, confirm: confirmArg },
+      inputSchema: z.object({ inAppPurchaseId: inAppPurchaseIdArg, confirm: confirmArg }),
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false },
     },
     async ({ inAppPurchaseId }) =>

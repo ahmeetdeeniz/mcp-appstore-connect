@@ -1,7 +1,7 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
 
 import type { AppStoreConnectClient } from "#/client/asc";
@@ -82,11 +82,11 @@ export const registerCertificateTools = (
         "per team, and an existing one should be exported as a .p12 from the Mac that holds its " +
         "private key rather than replaced. The certificate and CSR bodies are omitted here; " +
         "app_store_connect_download_certificate writes them to a file.",
-      inputSchema: {
+      inputSchema: z.object({
         certificateType: certificateTypeArg.optional(),
         displayName: z.string().optional().describe("Filter by display name (exact match)."),
         limit: limitArg,
-      },
+      }),
       annotations: { readOnlyHint: true },
     },
     async ({ certificateType, displayName, limit }) =>
@@ -115,10 +115,10 @@ export const registerCertificateTools = (
         "Note this recovers only the public certificate: it is useless without the private key " +
         "generated alongside the CSR, which never leaves the Mac that made it. A certificate " +
         "downloaded onto a machine that lacks that key cannot sign anything.",
-      inputSchema: {
+      inputSchema: z.object({
         certificateId: z.string().min(1).describe("Certificate id from list_certificates."),
         savePath: z.string().min(1).describe("Absolute path to write the .cer to."),
-      },
+      }),
       annotations: { readOnlyHint: true },
     },
     async ({ certificateId, savePath }) =>
@@ -154,7 +154,7 @@ export const registerCertificateTools = (
         "harder to lose). Pass the PEM text of the .csr as csrContent.\n\n" +
         "With openssl you must import devid.key into the keychain too, or the downloaded " +
         "certificate will have no key to pair with and codesign will not see an identity.",
-      inputSchema: {
+      inputSchema: z.object({
         certificateType: certificateTypeArg,
         csrContent: z
           .string()
@@ -163,7 +163,7 @@ export const registerCertificateTools = (
             "The full PEM text of the .csr, including the BEGIN/END CERTIFICATE REQUEST lines.",
           ),
         savePath: savePathArg,
-      },
+      }),
       annotations: { readOnlyHint: false, destructiveHint: false },
     },
     async ({ certificateType, csrContent, savePath }) =>
@@ -198,10 +198,10 @@ export const registerCertificateTools = (
         "distributed that was signed with it — and not yet notarized — can stop being trusted. " +
         "Revoke an expired or genuinely lost certificate, not one you are unsure about. " +
         "Developer ID certificates are capped per team, which is the usual reason to want this.",
-      inputSchema: {
+      inputSchema: z.object({
         certificateId: z.string().min(1).describe("Certificate id from list_certificates."),
         confirm: confirmArg,
-      },
+      }),
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false },
     },
     async ({ certificateId }) =>

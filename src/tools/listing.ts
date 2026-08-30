@@ -1,4 +1,4 @@
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
 
 import type { AppStoreConnectClient } from "#/client/asc";
@@ -57,7 +57,7 @@ export const registerListingTools = (
         "deliver uses); pass metadataRoot to write somewhere else. Write them yourself, then " +
         "edit and push back with app_store_connect_apply_listing. Use format 'review' to just " +
         "read the listing.",
-      inputSchema: {
+      inputSchema: z.object({
         appId: appIdArg,
         version: z
           .string()
@@ -82,7 +82,7 @@ export const registerListingTools = (
             `Repo-relative directory to write the metadata tree into. Defaults to ` +
               `${defaultRootLabel}. Use "." for the repo root itself.`,
           ),
-      },
+      }),
       annotations: { readOnlyHint: true },
     },
     async ({ appId, version, platform, locales, format, metadataRoot }) =>
@@ -143,7 +143,7 @@ export const registerListingTools = (
         "false and confirm: true. Fields changed in App Store Connect since the export are " +
         "reported as conflicts and skipped unless you pass force. An empty file clears a field, " +
         "but only with allowClear: true.",
-      inputSchema: {
+      inputSchema: z.object({
         files: z
           .array(
             z.object({
@@ -188,7 +188,7 @@ export const registerListingTools = (
           .default(false)
           .describe("Create localizations for locales in the files but not yet on the version."),
         locales: localesArg,
-      },
+      }),
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
     },
     // `confirm` is a plain boolean rather than the usual confirmArg (z.literal(true))
