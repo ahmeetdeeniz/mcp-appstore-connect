@@ -421,9 +421,11 @@ and every store field within Apple's limits, and pushes the result back through
 /plugin install appstore-toolkit@mgcrea-appstore
 ```
 
-Installing it also wires up the `appstore-connect` MCP server, so the skill and the tools it
-calls arrive together. The plugin stores **no credentials of its own** — set up the
-[config file](#config-file) once and the server finds them wherever you work.
+The plugin ships the skills only — it does not bundle the MCP server. Install the server
+yourself with any of the options under [Quick start](#quick-start); the skills call it by
+tool name and do not care how it was launched. The plugin stores **no credentials of its
+own** — set up the [config file](#config-file) once and the server finds them wherever you
+work.
 
 `apply_listing` is a write tool, so it stays hidden until writes are enabled
 (`"allowWrites": true` in the config file, or `APP_STORE_CONNECT_ALLOW_WRITES=1`). That is
