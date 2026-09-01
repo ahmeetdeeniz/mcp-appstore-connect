@@ -3,13 +3,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { gzipSync } from "node:zlib";
 
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { staticTokenProvider } from "../src/client/auth.js";
-import type { Config } from "../src/config.js";
-import { createServer } from "../src/server.js";
+import { staticTokenProvider } from "#/client/auth";
+import type { Config } from "#/config";
+import { createServer } from "#/server";
 
 const baseConfig: Config = {
   keyId: "ABCD123456",

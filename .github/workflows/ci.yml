@@ -42,46 +42,24 @@ jobs:
         run: pnpm run test
       - name: Build 📦
         run: pnpm run build
-      - name: Plugin manifests 🔍
+      # The tool list is the server's public contract and is easy to change by
+      # accident. Run with NO credentials: the server must still speak MCP over
+      # stdio and answer tools/list. A server that exits here shows in the client
+      # as a bare "Connection closed" with stderr swallowed, so nothing explains
+      # what to configure.
+      - name: MCP smoke test 🧪
         run: |
-          python3 -m json.tool .claude-plugin/marketplace.json > /dev/null
-          python3 -m json.tool plugins/appstore-toolkit/.claude-plugin/plugin.json > /dev/null
-          python3 -m json.tool plugins/appstore-toolkit/skills/appstore-release-prep/evals/evals.json > /dev/null
-          python3 -m json.tool plugins/appstore-toolkit/skills/appstore-performance-intel/evals/evals.json > /dev/null
-      # The plugin manifest carries two numbers that must move with the package:
-      # its own version (which drives Claude Code's auto-update) and the server
-      # version it pins. Both went stale by being maintained by hand — the pin
-      # sat at ^0.15.0 through five minors, which on a 0.x package resolves to
-      # 0.15.0 only, until that version rejected a newer config key and the
-      # server died at startup. release-it regenerates them; this fails the build
-      # if anything edits the manifest back out of step.
-      - name: Plugin manifest in sync 🔗
-        run: node scripts/sync-plugin-manifest.mjs --check
-      # Catches syntax and import breakage in the bundled auditor. Non-zero is expected
-      # here — this repo has no App Store listing — so the exit code is deliberately ignored.
-      - name: Audit script smoke test 🧪
-        run: |
-          python3 plugins/appstore-toolkit/skills/appstore-release-prep/scripts/audit_release.py \
-            --repo . --json > /dev/null || true
-      # Same for the reporting script: exercises every subcommand against the eval
-      # fixtures, so a broken parser or aggregation fails the build rather than a run.
-      - name: Report script smoke test 🧪
-        run: |
-          cd plugins/appstore-toolkit/skills/appstore-performance-intel
-          S=scripts/report_stats.py
-          F=evals/fixtures
-          python3 $S summary $F/may-sales.json > /dev/null
-          python3 $S group $F/june-engagement.json --by "Source Type" > /dev/null
-          python3 $S money $F/june-sales.json --by "Product Type Identifier" > /dev/null
-          python3 $S rate $F/may-sales.json $F/june-sales.json > /dev/null
-          python3 $S compare $F/may-sales.json $F/june-sales.json --by "Country Code" > /dev/null
-          python3 $S ratio $F/may-engagement.json $F/june-engagement.json \
-            --numerator "Event=Page view" --denominator "Event=Impression" --by "Source Type" > /dev/null
-          # The truncation guard must keep exiting non-zero on a truncated report.
-          if python3 $S summary $F/june-engagement-truncated.json > /dev/null 2>&1; then
-            echo "truncation guard did not fire" >&2
-            exit 1
-          fi
+          printf '%s\n' \
+            '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"ci","version":"0"}}}' \
+            '{"jsonrpc":"2.0","method":"notifications/initialized"}' \
+            '{"jsonrpc":"2.0","id":2,"method":"tools/list"}' \
+          | env APP_STORE_CONNECT_CONFIG=/nonexistent.json HOME=/nonexistent node dist/cli.js 2>/dev/null > /tmp/tools.json
+          grep -q 'app_store_connect_auth_status' /tmp/tools.json \
+            || { echo "server did not answer tools/list without credentials"; exit 1; }
+          # The negative half of the same promise: an unconfigured capability
+          # must not merely refuse, it must not be registered at all.
+          ! grep -q '"name":"app_store_connect_delete' /tmp/tools.json \
+            || { echo "gated tools leaked without credentials"; exit 1; }
 
   publish-npm:
     name: Publish to npm

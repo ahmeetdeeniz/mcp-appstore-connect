@@ -1,9 +1,9 @@
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
 
-import type { AppStoreConnectClient } from "../client/asc.js";
-import { summarizeResponse } from "../client/shape.js";
-import { appIdArg, compact, limitArg, wrap } from "./util.js";
+import type { AppStoreConnectClient } from "#/client/asc";
+import { summarizeResponse } from "#/client/shape";
+import { appIdArg, compact, limitArg, wrap } from "#/tools/util";
 
 export const registerBuildTools = (
   server: McpServer,
@@ -13,10 +13,11 @@ export const registerBuildTools = (
   server.registerTool(
     "app_store_connect_list_builds",
     {
+      title: "App Store Connect: List Builds",
       description:
         "List builds uploaded for an app (version, upload date, processing state, expiry). Filter " +
         "by version string or processing state to find e.g. the latest VALID build for TestFlight.",
-      inputSchema: {
+      inputSchema: z.object({
         appId: appIdArg,
         version: z
           .string()
@@ -27,7 +28,7 @@ export const registerBuildTools = (
           .optional()
           .describe("Filter by processing state. VALID builds are ready to use."),
         limit: limitArg,
-      },
+      }),
       annotations: { readOnlyHint: true },
     },
     async ({ appId, version, processingState, limit }) =>

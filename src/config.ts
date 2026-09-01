@@ -8,7 +8,7 @@ import {
   DEFAULT_METADATA_ROOT,
   MetadataRootError,
   normalizeMetadataRoot,
-} from "./listing/document.js";
+} from "#/listing/document";
 
 /**
  * Shared by both schemas so a bad root is rejected the same way whether it came
@@ -49,12 +49,15 @@ export type Contact = z.infer<typeof contactSchema>;
 
 const ConfigSchema = z
   .object({
-    keyId: z.string().min(1, "APP_STORE_CONNECT_KEY_ID is required (the 10-char key id)"),
-    issuerId: z.string().min(1, "APP_STORE_CONNECT_ISSUER_ID is required (a UUID)"),
+    // Optional at the schema level so "nothing is configured" is a state the
+    // server can report, not a crash before it ever connects — see loadConfig.
+    keyId: z.string().min(1).optional(),
+    issuerId: z.string().min(1).optional(),
     privateKey: z
       .string()
       .min(1)
-      .refine((v) => v.includes("BEGIN") && v.includes("PRIVATE KEY"), {
+      .optional()
+      .refine((v) => v === undefined || (v.includes("BEGIN") && v.includes("PRIVATE KEY")), {
         message:
           "The private key does not look like a PEM `.p8` file (missing `BEGIN PRIVATE KEY`). " +
           "Point APP_STORE_CONNECT_P8_PATH at the AuthKey_XXXX.p8 you downloaded from Apple.",
@@ -199,7 +202,10 @@ const readConfigFile = (path: string): FileConfig => {
  * is not a conflict with a `p8Path` in the config file, it simply overrides it.
  * Only naming both *within one source* is a genuine ambiguity.
  */
-export const resolvePrivateKey = (env: NodeJS.ProcessEnv, file: FileConfig = {}): string => {
+export const resolvePrivateKey = (
+  env: NodeJS.ProcessEnv,
+  file: FileConfig = {},
+): string | undefined => {
   const fromEnv = {
     inline: trimmed(env.APP_STORE_CONNECT_P8),
     path: trimmed(env.APP_STORE_CONNECT_P8_PATH),
@@ -226,11 +232,11 @@ export const resolvePrivateKey = (env: NodeJS.ProcessEnv, file: FileConfig = {})
       throw new Error(`Could not read the private key (${path}): ${message(err)}`, { cause: err });
     }
   }
-  throw new Error(
-    "No private key found. Set APP_STORE_CONNECT_P8_PATH to your AuthKey_XXXX.p8 file " +
-      "(or APP_STORE_CONNECT_P8 to its inline PEM contents), or add `p8Path` to " +
-      `${resolveConfigPath(env)}.`,
-  );
+  // Deliberately not a throw. A missing key means "unconfigured", which the
+  // server reports through app_store_connect_auth_status; exiting here would
+  // surface in the client as a bare "Connection closed" with this explanation
+  // swallowed. setupInstructions() carries the guidance instead.
+  return undefined;
 };
 
 /**
@@ -279,3 +285,35 @@ const mergeContact = (env: NodeJS.ProcessEnv, file: Contact | undefined): Contac
 
 const compactContact = (contact: Contact): Contact =>
   Object.fromEntries(Object.entries(contact).filter(([, v]) => v !== undefined));
+
+/** True once the server can actually mint a JWT for App Store Connect. */
+export const isConfigured = (config: Config): boolean =>
+  Boolean(config.keyId && config.issuerId && config.privateKey);
+
+/**
+ * Returned by app_store_connect_auth_status and printed to stderr at startup.
+ * Prose rather than a code, because this is the text someone acts on when
+ * nothing works.
+ */
+export const setupInstructions = (
+  config: Config,
+  configPath: string = resolveConfigPath(),
+): string[] => {
+  if (isConfigured(config)) return [];
+  const steps: string[] = [];
+  if (!config.keyId) steps.push("Set APP_STORE_CONNECT_KEY_ID (the 10-character key id).");
+  if (!config.issuerId) steps.push("Set APP_STORE_CONNECT_ISSUER_ID (a UUID).");
+  if (!config.privateKey) {
+    steps.push(
+      "No private key found. Set APP_STORE_CONNECT_P8_PATH to your AuthKey_XXXX.p8 file " +
+        "(or APP_STORE_CONNECT_P8 to its inline PEM contents), or add `p8Path` to " +
+        `${configPath}.`,
+    );
+  }
+  steps.push(
+    "Create the key at https://appstoreconnect.apple.com/access/integrations/api — the .p8 is " +
+      "downloadable exactly once.",
+    "Then restart the server.",
+  );
+  return steps;
+};

@@ -2,13 +2,12 @@ import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
 import { describe, expect, it, vi } from "vitest";
 
-import { staticTokenProvider } from "../src/client/auth.js";
-import type { Config } from "../src/config.js";
-import { createServer } from "../src/server.js";
+import { staticTokenProvider } from "#/client/auth";
+import type { Config } from "#/config";
+import { createServer } from "#/server";
 
 const FIXTURE_PATH = fileURLToPath(new URL("./fixtures/screenshot.png", import.meta.url));
 const FIXTURE_BYTES = readFileSync(FIXTURE_PATH);

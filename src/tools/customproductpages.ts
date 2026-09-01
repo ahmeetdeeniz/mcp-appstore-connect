@@ -78,11 +78,14 @@ export const registerCustomProductPageTools = (
           `/v1/appCustomProductPages/${customProductPageId}/appCustomProductPageVersions`,
           { limit: 50, "fields[appCustomProductPageVersions]": ["state", "version"] },
         );
-        const versions = resourcesOf(versionsResponse).map((row) => ({
-          id: row.id,
-          ...attributesOf(row),
-        }));
-        const draft = versions.find((v) => v.state === "PREPARE_FOR_SUBMISSION") ?? versions[0];
+        const versions = resourcesOf(versionsResponse).map(
+          (row): Record<string, unknown> => ({
+            id: row.id,
+            ...attributesOf(row),
+          }),
+        );
+        const draft =
+          versions.find((version) => version.state === "PREPARE_FOR_SUBMISSION") ?? versions[0];
         const localizations =
           draft && typeof draft.id === "string"
             ? summarizeResponse(
@@ -119,16 +122,15 @@ export const registerCustomProductPageTools = (
     },
     async ({ appId, name }) =>
       wrap(async () => {
-        const response = await client.post<{ data?: { id?: string; attributes?: Record<string, unknown> } }>(
-          "/v1/appCustomProductPages",
-          {
-            data: {
-              type: "appCustomProductPages",
-              attributes: { name },
-              relationships: { app: { data: { type: "apps", id: appId } } },
-            },
+        const response = await client.post<{
+          data?: { id?: string; attributes?: Record<string, unknown> };
+        }>("/v1/appCustomProductPages", {
+          data: {
+            type: "appCustomProductPages",
+            attributes: { name },
+            relationships: { app: { data: { type: "apps", id: appId } } },
           },
-        );
+        });
         const pageId = response.data?.id;
         if (!pageId) throw new Error("Creating the Custom Product Page returned no id.");
         const draft = await resolveDraftVersion(client, pageId, true);

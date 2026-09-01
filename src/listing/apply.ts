@@ -1,4 +1,4 @@
-import type { AppStoreConnectClient } from "../client/asc.js";
+import type { AppStoreConnectClient } from "#/client/asc";
 import {
   APP_INFO_ATTRIBUTES,
   FIELD_LIMITS,
@@ -9,9 +9,9 @@ import {
   charCount,
   digest,
   overLimit,
-} from "./document.js";
-import { fetchLocalizations } from "./fetch.js";
-import type { ParsedManifest } from "./manifest.js";
+} from "#/listing/document";
+import { fetchLocalizations } from "#/listing/fetch";
+import type { ParsedManifest } from "#/listing/manifest";
 
 export type ChangeAction =
   | "change"

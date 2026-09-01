@@ -1,12 +1,12 @@
 import { gunzipSync } from "node:zlib";
 
-import type { Logger, TokenProvider } from "./auth.js";
+import type { Logger, TokenProvider } from "#/client/auth";
 import {
   type AppStoreConnectError,
   AppStoreConnectApiError,
   flattenAssociatedErrors,
   formatAssociatedError,
-} from "./errors.js";
+} from "#/client/errors";
 
 export type QueryValue = string | number | boolean | string[] | undefined;
 export type Query = Record<string, QueryValue>;

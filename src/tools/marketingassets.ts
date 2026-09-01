@@ -34,8 +34,14 @@ const EVENT_ASSET_TYPES = ["EVENT_CARD", "EVENT_DETAILS_PAGE"] as const;
 
 const fileArgs = {
   filePath: z.string().optional().describe("Absolute path readable by the MCP server."),
-  fileData: z.string().optional().describe("Base64 image bytes; use when the server cannot read your host path."),
-  fileName: z.string().optional().describe("Required with fileData; optional override with filePath."),
+  fileData: z
+    .string()
+    .optional()
+    .describe("Base64 image bytes; use when the server cannot read your host path."),
+  fileName: z
+    .string()
+    .optional()
+    .describe("Required with fileData; optional override with filePath."),
 };
 
 const uploadReservedImage = async (
@@ -64,7 +70,7 @@ const uploadReservedImage = async (
       attributes: {
         fileName: name,
         fileSize: bytes.byteLength,
-        ...(opts.attributes ?? {}),
+        ...opts.attributes,
       },
       relationships: {
         [opts.relationshipName]: {
@@ -77,7 +83,8 @@ const uploadReservedImage = async (
   if (!assetId) throw new Error(`Reserving the ${opts.what} returned no id.`);
   const attrs =
     typeof reserved === "object" && reserved !== null && "data" in reserved
-      ? (reserved as { data?: { attributes?: { uploadOperations?: UploadOperation[] } } }).data?.attributes
+      ? (reserved as { data?: { attributes?: { uploadOperations?: UploadOperation[] } } }).data
+          ?.attributes
       : undefined;
   const operations = attrs?.uploadOperations ?? [];
 
@@ -162,15 +169,27 @@ export const registerMarketingAssetTools = (
       },
       annotations: { readOnlyHint: false, destructiveHint: false },
     },
-    async ({ customProductPageLocalizationId, displayType, filePath, fileData, fileName, waitSeconds }) =>
+    async ({
+      customProductPageLocalizationId,
+      displayType,
+      filePath,
+      fileData,
+      fileName,
+      waitSeconds,
+    }) =>
       wrap(async () => {
         const sets = await client.get(
           `/v1/appCustomProductPageLocalizations/${customProductPageLocalizationId}/appScreenshotSets`,
           { limit: 50 },
         );
         const rows =
-          typeof sets === "object" && sets !== null && "data" in sets && Array.isArray((sets as { data?: unknown[] }).data)
-            ? ((sets as { data: Array<{ id?: string; attributes?: { screenshotDisplayType?: string } }> }).data)
+          typeof sets === "object" &&
+          sets !== null &&
+          "data" in sets &&
+          Array.isArray((sets as { data?: unknown[] }).data)
+            ? (sets as {
+                data: Array<{ id?: string; attributes?: { screenshotDisplayType?: string } }>;
+              }).data
             : [];
         let setId = rows.find((row) => row.attributes?.screenshotDisplayType === displayType)?.id;
         if (!setId) {
@@ -190,7 +209,9 @@ export const registerMarketingAssetTools = (
           });
           setId = idOf(created);
         }
-        if (!setId) throw new Error("Creating the Custom Product Page screenshot set returned no id.");
+        if (!setId) {
+          throw new Error("Creating the Custom Product Page screenshot set returned no id.");
+        }
 
         return uploadReservedImage(client, {
           reservePath: "/v1/appScreenshots",
@@ -248,7 +269,8 @@ export const registerMarketingAssetTools = (
   server.registerTool(
     "app_store_connect_delete_app_event_image",
     {
-      description: "Delete an In-App Event image. Use after a failed upload or when replacing artwork.",
+      description:
+        "Delete an In-App Event image. Use after a failed upload or when replacing artwork.",
       inputSchema: { appEventScreenshotId: z.string().min(1), confirm: confirmArg },
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true },
     },

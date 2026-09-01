@@ -1,10 +1,10 @@
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { McpServer } from "@modelcontextprotocol/server";
 
-import { BUILD_INFO } from "./build-info.js";
-import { AppStoreConnectClient } from "./client/asc.js";
-import { createTokenProvider, type Logger, type TokenProvider } from "./client/auth.js";
-import type { Config } from "./config.js";
-import { registerTools } from "./tools/index.js";
+import { BUILD_INFO } from "#/build-info";
+import { AppStoreConnectClient } from "#/client/asc";
+import { createTokenProvider, type Logger, type TokenProvider } from "#/client/auth";
+import type { Config } from "#/config";
+import { registerTools } from "#/tools/index";
 
 export const SERVER_NAME = BUILD_INFO.name;
 export const SERVER_VERSION = BUILD_INFO.version;
@@ -31,10 +31,13 @@ export const createServer = (opts: CreateServerOptions): CreatedServer => {
   const tokenProvider =
     opts.tokenProvider ??
     createTokenProvider({
+      // Placeholders when unconfigured: the provider is built either way so
+      // `createServer` stays total, but no API-calling tool is registered, so
+      // it is never actually asked to mint a token.
       credentials: {
-        keyId: config.keyId,
-        issuerId: config.issuerId,
-        privateKey: config.privateKey,
+        keyId: config.keyId ?? "",
+        issuerId: config.issuerId ?? "",
+        privateKey: config.privateKey ?? "",
       },
       ttlSeconds: config.tokenTtlSeconds,
       ...(opts.logger ? { logger: opts.logger } : {}),
@@ -49,6 +52,7 @@ export const createServer = (opts: CreateServerOptions): CreatedServer => {
   });
 
   registerTools(server, client, {
+    config,
     allowWrites: config.allowWrites,
     vendorNumber: config.vendorNumber,
     vendorNumberSource: config.vendorNumberSource,

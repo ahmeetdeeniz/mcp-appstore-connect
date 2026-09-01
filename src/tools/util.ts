@@ -1,7 +1,7 @@
 import { z } from "zod";
 
-import type { AppStoreConnectClient, Query } from "../client/asc.js";
-import { AppStoreConnectApiError, WritesDisabledError } from "../client/errors.js";
+import type { AppStoreConnectClient, Query } from "#/client/asc";
+import { AppStoreConnectApiError, WritesDisabledError } from "#/client/errors";
 
 export type ToolResult = {
   content: { type: "text"; text: string }[];

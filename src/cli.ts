@@ -1,9 +1,9 @@
 #!/usr/bin/env node
-import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { StdioServerTransport } from "@modelcontextprotocol/server/stdio";
 
-import { BUILD_INFO } from "./build-info.js";
-import { loadConfig } from "./config.js";
-import { createServer } from "./server.js";
+import { BUILD_INFO } from "#/build-info";
+import { isConfigured, loadConfig, setupInstructions } from "#/config";
+import { createServer } from "#/server";
 
 const stderrLogger = {
   debug: (...args: unknown[]) => {
@@ -26,6 +26,10 @@ const main = async (): Promise<void> => {
       `vendor=${config.vendorNumber ?? "unset"}, ` +
       `writes=${config.allowWrites ? "ENABLED" : "disabled"})`,
   );
+  if (!isConfigured(config)) {
+    stderrLogger.warn("  not configured — only app_store_connect_auth_status is available:");
+    for (const line of setupInstructions(config)) stderrLogger.warn(`  ${line}`);
+  }
 
   const shutdown = (signal: string): void => {
     stderrLogger.warn(`received ${signal}, shutting down`);

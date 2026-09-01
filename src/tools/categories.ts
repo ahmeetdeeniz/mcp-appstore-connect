@@ -1,9 +1,9 @@
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
 
-import type { AppStoreConnectClient } from "../client/asc.js";
-import { includedOf, resourcesOf, summarizeResponse } from "../client/shape.js";
-import { PLATFORMS, compact, limitArg, wrap } from "./util.js";
+import type { AppStoreConnectClient } from "#/client/asc";
+import { includedOf, resourcesOf, summarizeResponse } from "#/client/shape";
+import { PLATFORMS, compact, limitArg, wrap } from "#/tools/util";
 
 // A category is not metadata you can leave for later: an app with no
 // primaryCategory is refused at submission with
@@ -62,18 +62,19 @@ export const registerCategoryTools = (
   server.registerTool(
     "app_store_connect_list_app_categories",
     {
+      title: "App Store Connect: List App Categories",
       description:
         "List the App Store categories an app can be filed under, with their subcategories. " +
         "Returns the appCategories ids that app_store_connect_set_app_categories takes. " +
         "Categories are platform-specific — Developer Tools exists on macOS and not on iOS — so " +
         "filter by the platform you are submitting for rather than assuming a shared list.",
-      inputSchema: {
+      inputSchema: z.object({
         platform: z
           .enum(PLATFORMS)
           .optional()
           .describe("Only categories available on this platform."),
         limit: limitArg,
-      },
+      }),
       annotations: { readOnlyHint: true },
     },
     async ({ platform, limit }) =>
@@ -116,13 +117,14 @@ export const registerCategoryTools = (
   server.registerTool(
     "app_store_connect_set_app_categories",
     {
+      title: "App Store Connect: Set App Categories",
       description:
         "Set an app's App Store category. A primary category is REQUIRED before a version can be " +
         "submitted; without one Apple refuses the submission with a relationship error against " +
         "the appInfo and names nothing else. Only the categories you pass are changed. " +
         "Subcategories are optional and only some categories accept them (Games most notably). " +
         "This is version-independent — set it once, not per release.",
-      inputSchema: {
+      inputSchema: z.object({
         appInfoId: appInfoIdArg,
         primaryCategory: categoryArg("The app's main category"),
         primarySubcategoryOne: clearableCategoryArg("First subcategory of the primary category"),
@@ -134,7 +136,7 @@ export const registerCategoryTools = (
         secondarySubcategoryTwo: clearableCategoryArg(
           "Second subcategory of the secondary category",
         ),
-      },
+      }),
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
     },
     async ({

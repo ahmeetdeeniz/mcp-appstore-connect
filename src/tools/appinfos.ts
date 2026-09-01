@@ -1,9 +1,9 @@
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
 
-import type { AppStoreConnectClient } from "../client/asc.js";
-import { summarizeResponse } from "../client/shape.js";
-import { appIdArg, compact, limitArg, wrap } from "./util.js";
+import type { AppStoreConnectClient } from "#/client/asc";
+import { summarizeResponse } from "#/client/shape";
+import { appIdArg, compact, limitArg, wrap } from "#/tools/util";
 
 // An app's listing is split across two resources, and which one holds a field is
 // not guessable: appStoreVersionLocalizations carry the per-version copy
@@ -55,11 +55,12 @@ export const registerAppInfoTools = (
   server.registerTool(
     "app_store_connect_list_app_infos",
     {
+      title: "App Store Connect: List App Infos",
       description:
         "List an app's appInfo records, which hold the version-independent listing: name, " +
         "subtitle, privacy policy, categories and age rating. An app usually has two — the live " +
         "one (READY_FOR_SALE) and the editable one — so check `appStoreState` before updating.",
-      inputSchema: { appId: appIdArg, limit: limitArg },
+      inputSchema: z.object({ appId: appIdArg, limit: limitArg }),
       annotations: { readOnlyHint: true },
     },
     async ({ appId, limit }) =>
@@ -76,10 +77,11 @@ export const registerAppInfoTools = (
   server.registerTool(
     "app_store_connect_list_app_info_localizations",
     {
+      title: "App Store Connect: List App Info Localizations",
       description:
         "List the per-locale name, subtitle and privacy policy for one appInfo. Returns the " +
         "localization ids you update.",
-      inputSchema: { appInfoId: appInfoIdArg, limit: limitArg },
+      inputSchema: z.object({ appInfoId: appInfoIdArg, limit: limitArg }),
       annotations: { readOnlyHint: true },
     },
     async ({ appInfoId, limit }) =>
@@ -93,8 +95,9 @@ export const registerAppInfoTools = (
   server.registerTool(
     "app_store_connect_get_app_info_localization",
     {
+      title: "App Store Connect: Get App Info Localization",
       description: "Get one locale's name, subtitle and privacy policy fields.",
-      inputSchema: { localizationId: appInfoLocalizationIdArg },
+      inputSchema: z.object({ localizationId: appInfoLocalizationIdArg }),
       annotations: { readOnlyHint: true },
     },
     async ({ localizationId }) =>
@@ -106,12 +109,13 @@ export const registerAppInfoTools = (
   server.registerTool(
     "app_store_connect_get_age_rating_declaration",
     {
+      title: "App Store Connect: Get Age Rating Declaration",
       description:
         "Read an app's age rating questionnaire answers — the content declarations behind the " +
         "rating, including `socialMedia`, `userGeneratedContent` and `messagingAndChat`. Returns " +
         "the declaration id that app_store_connect_update_age_rating_declaration takes. Note the " +
         "declaration is version-independent: there is one per appInfo, not one per release.",
-      inputSchema: { appInfoId: appInfoIdArg },
+      inputSchema: z.object({ appInfoId: appInfoIdArg }),
       annotations: { readOnlyHint: true },
     },
     async ({ appInfoId }) =>
@@ -125,13 +129,14 @@ export const registerAppInfoTools = (
   server.registerTool(
     "app_store_connect_update_age_rating_declaration",
     {
+      title: "App Store Connect: Update Age Rating Declaration",
       description:
         "Answer the age rating questionnaire. Only the fields you pass are changed, so a single " +
         "unanswered question can be filled in without restating the rest. Apple recomputes the " +
         "public rating from these answers, so a wrong value can change the app's rating or its " +
         "availability in a territory. From September 2026 `socialMedia` must be answered before " +
         "Apple accepts a new version, an update, or a notarization request.",
-      inputSchema: {
+      inputSchema: z.object({
         declarationId: ageRatingDeclarationIdArg,
 
         // Time Allowance / social — the September 2026 requirement.
@@ -193,7 +198,7 @@ export const registerAppInfoTools = (
           .string()
           .optional()
           .describe("URL explaining the developer's own age rating information."),
-      },
+      }),
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
     },
     async ({ declarationId, ...attributes }) =>
@@ -213,11 +218,12 @@ export const registerAppInfoTools = (
   server.registerTool(
     "app_store_connect_update_app_info_localization",
     {
+      title: "App Store Connect: Update App Info Localization",
       description:
         "Update the version-independent listing fields for one locale: app name (30 chars), " +
         "subtitle (30 chars) and privacy policy. Only the fields you pass are changed. Apple " +
         "rejects a name change once the version is in review.",
-      inputSchema: {
+      inputSchema: z.object({
         localizationId: appInfoLocalizationIdArg,
         name: z.string().optional().describe("The app name as shown on the store (30-char limit)."),
         subtitle: z
@@ -233,7 +239,7 @@ export const registerAppInfoTools = (
           .string()
           .optional()
           .describe("URL where users manage their privacy choices."),
-      },
+      }),
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
     },
     async ({ localizationId, ...attributes }) =>

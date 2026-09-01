@@ -18,9 +18,19 @@
  *
  * Both are the same bug: a number that must change on release, kept by hand, in
  * a file nobody opens during a release. So it is no longer kept by hand. The
- * plugin version tracks the package version exactly, and the server pin becomes
- * `>=<version>` — the plugin requires at least the server it shipped beside,
- * and does not pin the minor.
+ * plugin version tracks the package version exactly.
+ *
+ * The plugin no longer BUNDLES the server, so the pin is now optional and this
+ * script only maintains it if a future manifest brings one back. Bundling it
+ * was a third instance of the same bug, arrived at from a new direction: the
+ * pin `>=<version>` names the version being published at that very moment, and
+ * an npm configured with `min-release-age` (a supply-chain guard that refuses
+ * packages younger than N days) can resolve NO version in that range until the
+ * guard expires. The plugin's server was then dead for a day after every
+ * release, again as a bare CONNECTION_CLOSED. A pin that is correct only after
+ * a delay is not a pin worth keeping, and the server is better installed on its
+ * own terms — supervised, with credentials somewhere better than a subprocess
+ * environment — than spawned per-editor by `npx`.
  *
  * Run by release-it's `after:bump` hook, so it lands in the release commit.
  * `--check` verifies without writing, which is what CI runs.
@@ -37,21 +47,22 @@ const read = (path) => JSON.parse(readFileSync(path, "utf8"));
 const { version } = read(join(root, "package.json"));
 const manifest = read(manifestPath);
 
+// Absent by design: the plugin ships skills only. Its absence must not fail the
+// release — but if a manifest ever declares a server again, the pin goes back
+// to being maintained here rather than by hand, which is the whole point.
 const server = manifest.mcpServers?.["appstore-connect"];
-if (!server?.args?.length) {
-  console.error("sync-plugin-manifest: no mcpServers['appstore-connect'].args in the manifest.");
+if (server && !server.args?.length) {
+  console.error("sync-plugin-manifest: mcpServers['appstore-connect'] has no args.");
   process.exit(1);
 }
 
 // The package spec is the last arg: ["-y", "@scope/name@range"].
-const specIndex = server.args.length - 1;
-const spec = server.args[specIndex];
-const name = spec.slice(0, spec.lastIndexOf("@"));
-const wantSpec = `${name}@>=${version}`;
+const spec = server ? server.args[server.args.length - 1] : undefined;
+const wantSpec = spec ? `${spec.slice(0, spec.lastIndexOf("@"))}@>=${version}` : undefined;
 
 const drift = [];
 if (manifest.version !== version) drift.push(`version ${manifest.version} -> ${version}`);
-if (spec !== wantSpec) drift.push(`server pin ${spec} -> ${wantSpec}`);
+if (spec && spec !== wantSpec) drift.push(`server pin ${spec} -> ${wantSpec}`);
 
 if (drift.length === 0) {
   console.log(`sync-plugin-manifest: already in sync at ${version}.`);
@@ -84,7 +95,7 @@ if (manifest.version !== version) {
   }
 }
 
-if (spec !== wantSpec) {
+if (spec && spec !== wantSpec) {
   const before = text;
   text = text.replace(quoted(spec), quoted(wantSpec));
   if (text === before) {

@@ -77,7 +77,8 @@ export const registerReleaseDoctorTools = (
         const versionAttrs = attributesOf(version);
         const versionString =
           typeof versionAttrs.versionString === "string" ? versionAttrs.versionString : undefined;
-        const platform = typeof versionAttrs.platform === "string" ? versionAttrs.platform : undefined;
+        const platform =
+          typeof versionAttrs.platform === "string" ? versionAttrs.platform : undefined;
         const appStoreState =
           typeof versionAttrs.appStoreState === "string" ? versionAttrs.appStoreState : undefined;
         const appId = relatedId(version, "app");
@@ -196,9 +197,7 @@ export const registerReleaseDoctorTools = (
           }
         }
 
-        let listing:
-          | Awaited<ReturnType<typeof fetchListing>>
-          | undefined;
+        let listing: Awaited<ReturnType<typeof fetchListing>> | undefined;
         if (appId && versionString && platform) {
           try {
             listing = await fetchListing(client, {
@@ -329,17 +328,20 @@ export const registerReleaseDoctorTools = (
               "Use app_store_connect_set_app_store_review_detail.",
             );
           } else {
-            const missingContact = [
-              ["contactFirstName", "first name"],
-              ["contactLastName", "last name"],
-              ["contactEmail", "email"],
-              ["contactPhone", "phone"],
-            ]
+            const missingContact = (
+              [
+                ["contactFirstName", "first name"],
+                ["contactLastName", "last name"],
+                ["contactEmail", "email"],
+                ["contactPhone", "phone"],
+              ] as const
+            )
               .filter(([field]) => !nonEmpty(reviewAttrs[field]))
               .map(([, label]) => label);
             const demoMissing =
               reviewAttrs.demoAccountRequired === true &&
-              (!nonEmpty(reviewAttrs.demoAccountName) || !nonEmpty(reviewAttrs.demoAccountPassword));
+              (!nonEmpty(reviewAttrs.demoAccountName) ||
+                !nonEmpty(reviewAttrs.demoAccountPassword));
 
             if (missingContact.length === 0 && !demoMissing) {
               add(
@@ -353,7 +355,9 @@ export const registerReleaseDoctorTools = (
                 ...(missingContact.length > 0
                   ? [`missing contact fields: ${missingContact.join(", ")}`]
                   : []),
-                ...(demoMissing ? ["demo account is required but its username/password is incomplete"] : []),
+                ...(demoMissing
+                  ? ["demo account is required but its username/password is incomplete"]
+                  : []),
               ];
               add(
                 "review-detail",
@@ -407,7 +411,12 @@ export const registerReleaseDoctorTools = (
               );
             }
           } catch (err) {
-            add("age-rating", "Age rating", "warn", `Could not verify age rating: ${message(err)}`);
+            add(
+              "age-rating",
+              "Age rating",
+              "warn",
+              `Could not verify age rating: ${message(err)}`,
+            );
           }
 
           const primaryLocale = listing.app.primaryLocale;
@@ -458,7 +467,12 @@ export const registerReleaseDoctorTools = (
                 );
               }
             } catch (err) {
-              add("screenshots", "Screenshots", "warn", `Could not verify screenshots: ${message(err)}`);
+              add(
+                "screenshots",
+                "Screenshots",
+                "warn",
+                `Could not verify screenshots: ${message(err)}`,
+              );
             }
           }
         }

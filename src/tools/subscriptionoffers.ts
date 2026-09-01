@@ -2,7 +2,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 
 import type { AppStoreConnectClient } from "../client/asc.js";
-import { attributesOf, resourcesOf, summarizeResponse } from "../client/shape.js";
+import { attributesOf, summarizeResponse } from "../client/shape.js";
 import { PreconditionError, confirmArg, limitArg, territoryArg, wrap } from "./util.js";
 
 const OFFER_DURATIONS = [
@@ -78,7 +78,10 @@ const resolveOrVerifyPricePoint = async (
 const inlinePrice = (
   pricePointId: string,
   territory: string,
-  type: "subscriptionPromotionalOfferPrices" | "subscriptionOfferCodePrices" | "winBackOfferPrices",
+  type:
+    | "subscriptionPromotionalOfferPrices"
+    | "subscriptionOfferCodePrices"
+    | "winBackOfferPrices",
   localId: string,
 ): { relationship: { data: { type: string; id: string }[] }; included: Record<string, unknown> } => ({
   relationship: { data: [{ type, id: localId }] },
@@ -458,7 +461,12 @@ export const registerSubscriptionOfferTools = (
           pricePointId,
           customerPrice,
         );
-        const price = inlinePrice(pointId, territory, "winBackOfferPrices", "${win-back-price-1}");
+        const price = inlinePrice(
+          pointId,
+          territory,
+          "winBackOfferPrices",
+          "${win-back-price-1}",
+        );
         const attributes: Record<string, unknown> = {
           referenceName,
           offerId,

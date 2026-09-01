@@ -1,7 +1,7 @@
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
 
-import type { AppStoreConnectClient } from "../client/asc.js";
+import type { AppStoreConnectClient } from "#/client/asc";
 import {
   attributesOf,
   includedOf,
@@ -9,7 +9,7 @@ import {
   resourceOf,
   resourcesOf,
   summarizeResponse,
-} from "../client/shape.js";
+} from "#/client/shape";
 import {
   PreconditionError,
   appIdArg,
@@ -19,7 +19,7 @@ import {
   limitArg,
   territoryArg,
   wrap,
-} from "./util.js";
+} from "#/tools/util";
 
 // The app's OWN price is a separate resource from any in-app purchase's, and
 // having priced the IAP does nothing for it: a version cannot be submitted until
@@ -132,19 +132,20 @@ export const registerPricingTools = (
   server.registerTool(
     "app_store_connect_list_app_price_points",
     {
+      title: "App Store Connect: List App Price Points",
       description:
         "List the price points an app can be sold at in one territory, each with its customer " +
         "price and your proceeds. Returns the appPricePoints ids that " +
         "app_store_connect_set_app_price takes. A free app uses the price point whose " +
         "customerPrice is 0 — filter for it rather than assuming an id.",
-      inputSchema: {
+      inputSchema: z.object({
         appId: appIdArg,
         territory: territoryArg.describe(
           'Territory to list prices for, e.g. "USA". Price points are per-territory, and the ' +
             "one you pass here must be the same territory you later set as baseTerritory.",
         ),
         limit: limitArg,
-      },
+      }),
       annotations: { readOnlyHint: true },
     },
     async ({ appId, territory, limit }) =>
@@ -161,13 +162,14 @@ export const registerPricingTools = (
   server.registerTool(
     "app_store_connect_get_app_price_schedule",
     {
+      title: "App Store Connect: Get App Price Schedule",
       description:
         "Show what an app currently costs: its base territory and every manual price in force, " +
         "each with its territory, its customerPrice and proceeds, and its start/end date. A " +
         "customerPrice of 0 is how a free app is priced. A null result means the app has never " +
         "been priced, which blocks submission — this is the check for " +
         "STATE_ERROR.APP_PRICING_REQUIRED.",
-      inputSchema: { appId: appIdArg },
+      inputSchema: z.object({ appId: appIdArg }),
       annotations: { readOnlyHint: true },
     },
     async ({ appId }) =>
@@ -207,6 +209,7 @@ export const registerPricingTools = (
   server.registerTool(
     "app_store_connect_set_app_price",
     {
+      title: "App Store Connect: Set App Price",
       description:
         "Set what an app costs, by pointing it at a price point from " +
         "app_store_connect_list_app_price_points. Prices in every other territory are derived " +
@@ -214,7 +217,7 @@ export const registerPricingTools = (
         "the app's whole price schedule — any manual price already set is dropped — and once the " +
         "start date arrives it changes what real customers are charged. Omit startDate to price " +
         "it immediately. To make an app free, pass the price point whose customerPrice is 0.",
-      inputSchema: {
+      inputSchema: z.object({
         appId: appIdArg,
         pricePointId: z
           .string()
@@ -239,7 +242,7 @@ export const registerPricingTools = (
           .optional()
           .describe('Date the price stops applying, "YYYY-MM-DD". Omit to leave it open-ended.'),
         confirm: confirmArg,
-      },
+      }),
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true },
     },
     async ({ appId, pricePointId, baseTerritory, startDate, endDate }) =>

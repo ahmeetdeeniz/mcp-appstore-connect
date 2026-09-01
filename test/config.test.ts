@@ -5,7 +5,7 @@ import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { loadConfig, resolveConfigPath } from "../src/config.js";
+import { loadConfig, resolveConfigPath, isConfigured, setupInstructions } from "#/config";
 
 const pem = generateKeyPairSync("ec", { namedCurve: "P-256" })
   .privateKey.export({ type: "pkcs8", format: "pem" })
@@ -74,16 +74,41 @@ describe("loadConfig", () => {
     ).toThrow(/only one/i);
   });
 
-  it("errors clearly when no key is provided", () => {
+  // These two used to assert that loadConfig throws. It deliberately no longer
+  // does: a server that exits at startup surfaces in the client as a bare
+  // "MCP error -32000: Connection closed" with stderr swallowed, so the message
+  // explaining what to configure never reaches anyone. Missing configuration is
+  // now a state, reported through app_store_connect_auth_status.
+  it("does not throw when no key is provided, and says where to put one", () => {
     const env = {
       APP_STORE_CONNECT_KEY_ID: "ABCD123456",
       APP_STORE_CONNECT_ISSUER_ID: "69a6de70-0000-0000-0000-000000000000",
     };
-    expect(() => loadConfig(env, noConfig)).toThrow(/No private key/);
+    const cfg = loadConfig(env, noConfig);
+    expect(cfg.privateKey).toBeUndefined();
+    expect(isConfigured(cfg)).toBe(false);
+    expect(setupInstructions(cfg, noConfig).join(" ")).toMatch(/No private key/);
   });
 
-  it("requires key id and issuer id", () => {
-    expect(() => loadConfig({ APP_STORE_CONNECT_P8: pem }, noConfig)).toThrow();
+  it("does not throw when the key id and issuer id are missing", () => {
+    const cfg = loadConfig({ APP_STORE_CONNECT_P8: pem }, noConfig);
+    expect(isConfigured(cfg)).toBe(false);
+    const steps = setupInstructions(cfg, noConfig).join(" ");
+    expect(steps).toContain("APP_STORE_CONNECT_KEY_ID");
+    expect(steps).toContain("APP_STORE_CONNECT_ISSUER_ID");
+  });
+
+  it("reports configured once all three are present", () => {
+    const cfg = loadConfig(
+      {
+        APP_STORE_CONNECT_KEY_ID: "ABCD123456",
+        APP_STORE_CONNECT_ISSUER_ID: "69a6de70-0000-0000-0000-000000000000",
+        APP_STORE_CONNECT_P8: pem,
+      },
+      noConfig,
+    );
+    expect(isConfigured(cfg)).toBe(true);
+    expect(setupInstructions(cfg, noConfig)).toEqual([]);
   });
 
   it("parses the write flag and vendor number", () => {

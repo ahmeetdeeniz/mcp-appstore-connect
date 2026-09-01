@@ -1,11 +1,11 @@
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
 
-import type { AppStoreConnectClient } from "../client/asc.js";
-import { attributesOf, resourceOf, summarizeResponse } from "../client/shape.js";
-import type { Contact } from "../config.js";
-import type { ToolContext } from "./index.js";
-import { compact, getOrNull, versionIdArg, wrap } from "./util.js";
+import type { AppStoreConnectClient } from "#/client/asc";
+import { attributesOf, resourceOf, summarizeResponse } from "#/client/shape";
+import type { Contact } from "#/config";
+import type { ToolContext } from "#/tools/index";
+import { compact, getOrNull, versionIdArg, wrap } from "#/tools/util";
 
 // App Review Information: who Apple contacts, and how they get into the app.
 // The resource does not exist until someone creates it, and a version without
@@ -119,11 +119,12 @@ export const registerReviewDetailTools = (
   server.registerTool(
     "app_store_connect_get_app_store_review_detail",
     {
+      title: "App Store Connect: Get App Store Review Detail",
       description:
         "Get the App Review Information attached to a version: the contact Apple reaches, the " +
         "demo account, and the reviewer notes. A null result means none exists, which blocks " +
         "submission — this is the check for the 'appStoreReviewDetail … was not found' error.",
-      inputSchema: { versionId: versionIdArg },
+      inputSchema: z.object({ versionId: versionIdArg }),
       annotations: { readOnlyHint: true },
     },
     async ({ versionId }) =>
@@ -152,6 +153,7 @@ export const registerReviewDetailTools = (
   server.registerTool(
     "app_store_connect_set_app_store_review_detail",
     {
+      title: "App Store Connect: Set App Store Review Detail",
       description:
         "Set the App Review Information for a version, creating it if this is the first time. " +
         "Required before submitting: a version with none is refused, and the error names a " +
@@ -160,7 +162,7 @@ export const registerReviewDetailTools = (
         "has a question, so it must be a real person who will answer — omit the contact " +
         "fields to use the one configured in config.json, which only fills what the record " +
         "is missing and reports any value that disagrees with it.",
-      inputSchema: { versionId: versionIdArg, ...reviewDetailFields },
+      inputSchema: z.object({ versionId: versionIdArg, ...reviewDetailFields }),
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
     },
     async ({ versionId, ...attributes }) =>

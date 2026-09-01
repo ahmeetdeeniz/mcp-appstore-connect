@@ -2,7 +2,7 @@ import { createVerify, generateKeyPairSync } from "node:crypto";
 
 import { describe, expect, it } from "vitest";
 
-import { createTokenProvider, signJwt, type JwtCredentials } from "../src/client/auth.js";
+import { createTokenProvider, signJwt, type JwtCredentials } from "#/client/auth";
 
 /** A throwaway EC P-256 keypair — the curve App Store Connect's ES256 uses. */
 const { privateKey, publicKey } = generateKeyPairSync("ec", { namedCurve: "P-256" });

@@ -1,7 +1,7 @@
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
 
-import type { AppStoreConnectClient } from "../client/asc.js";
+import type { AppStoreConnectClient } from "#/client/asc";
 import {
   type Rec,
   attributesOf,
@@ -10,7 +10,7 @@ import {
   resourceOf,
   resourcesOf,
   summarizeResponse,
-} from "../client/shape.js";
+} from "#/client/shape";
 import {
   PLATFORMS,
   PreconditionError,
@@ -21,7 +21,7 @@ import {
   limitArg,
   versionIdArg,
   wrap,
-} from "./util.js";
+} from "#/tools/util";
 
 const SUBMISSION_STATES = [
   "READY_FOR_REVIEW",
@@ -249,16 +249,17 @@ export const registerSubmissionTools = (
   server.registerTool(
     "app_store_connect_list_review_submissions",
     {
+      title: "App Store Connect: List Review Submissions",
       description:
         "List an app's App Store review submissions and their state (READY_FOR_REVIEW is a draft " +
         "not yet sent to Apple; WAITING_FOR_REVIEW and IN_REVIEW are with Apple). Each row " +
         "carries the id of the version under review.",
-      inputSchema: {
+      inputSchema: z.object({
         appId: appIdArg,
         platform: z.enum(PLATFORMS).optional().describe("Filter by platform."),
         state: z.enum(SUBMISSION_STATES).optional().describe("Filter by submission state."),
         limit: limitArg,
-      },
+      }),
       annotations: { readOnlyHint: true },
     },
     async ({ appId, platform, state, limit }) =>
@@ -282,6 +283,7 @@ export const registerSubmissionTools = (
   server.registerTool(
     "app_store_connect_submit_version_for_review",
     {
+      title: "App Store Connect: Submit Version for Review",
       description:
         "Submit an App Store version to Apple for review — the final step of a release. Creates " +
         "(or reuses) the app's draft review submission, adds the version to it, and submits it. " +
@@ -299,7 +301,7 @@ export const registerSubmissionTools = (
         "privacy — which is otherwise only visible by attempting a real submission. A dry run " +
         "of a draft does stage the version on it, which moves the version to READY_FOR_REVIEW; " +
         "calling again without dryRun finishes that same submission.",
-      inputSchema: { versionId: versionIdArg, dryRun: dryRunArg, confirm: confirmArg },
+      inputSchema: z.object({ versionId: versionIdArg, dryRun: dryRunArg, confirm: confirmArg }),
       annotations: { readOnlyHint: false, destructiveHint: false },
     },
     async ({ versionId, dryRun = false }) =>
@@ -545,6 +547,7 @@ export const registerSubmissionTools = (
   server.registerTool(
     "app_store_connect_remove_version_from_submission",
     {
+      title: "App Store Connect: Remove Version from Submission",
       description:
         "Take a version back off this app's un-submitted draft review submission, returning it " +
         "to PREPARE_FOR_SUBMISSION so its build and metadata can be changed again. " +
@@ -558,7 +561,7 @@ export const registerSubmissionTools = (
         "Connect web UI. " +
         "Drafts only: a submission already handed to Apple is refused and named, since " +
         "withdrawing that one is cancel_review_submission's job.",
-      inputSchema: { versionId: versionIdArg, confirm: confirmArg },
+      inputSchema: z.object({ versionId: versionIdArg, confirm: confirmArg }),
       annotations: { readOnlyHint: false, destructiveHint: true },
     },
     async ({ versionId }) =>
@@ -620,6 +623,7 @@ export const registerSubmissionTools = (
   server.registerTool(
     "app_store_connect_cancel_review_submission",
     {
+      title: "App Store Connect: Cancel Review Submission",
       description:
         "Withdraw a review submission from Apple, returning its versions to an editable state. " +
         "Only works while the submission is still with Apple and has not started completing; a " +
@@ -628,7 +632,7 @@ export const registerSubmissionTools = (
         "yours to edit, and app_store_connect_submit_version_for_review sends it back without " +
         "losing the queue position or restarting the review of any in-app purchase attached " +
         "to it.",
-      inputSchema: { submissionId: submissionIdArg, confirm: confirmArg },
+      inputSchema: z.object({ submissionId: submissionIdArg, confirm: confirmArg }),
       annotations: { readOnlyHint: false, destructiveHint: true },
     },
     async ({ submissionId }) =>

@@ -78,7 +78,13 @@ describe("subscription writes", () => {
   it("creates a subscription with the group relationship", async () => {
     const fetchImpl = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
       if (init?.method === "POST") {
-        return jsonResponse({ data: { id: "sub-1", type: "subscriptions", attributes: { state: "MISSING_METADATA" } } });
+        return jsonResponse({
+          data: {
+            id: "sub-1",
+            type: "subscriptions",
+            attributes: { state: "MISSING_METADATA" },
+          },
+        });
       }
       return jsonResponse({ data: [] });
     });
@@ -98,9 +104,13 @@ describe("subscription writes", () => {
       },
     });
 
-    const post = fetchImpl.mock.calls.find((call) => (call[1] as RequestInit | undefined)?.method === "POST");
-    expect(String(post?.[0])).toContain("/v1/subscriptions");
-    const body = JSON.parse(String((post?.[1] as RequestInit).body)) as {
+    const post = fetchImpl.mock.calls.find(
+      (call) => (call[1] as RequestInit | undefined)?.method === "POST",
+    );
+    expect(post).toBeDefined();
+    if (!post) throw new Error("Expected a subscription POST request.");
+    expect(String(post[0])).toContain("/v1/subscriptions");
+    const body = JSON.parse(String((post[1] as RequestInit).body)) as {
       data: { relationships: { group: { data: { id: string } } } };
     };
     expect(body.data.relationships.group.data.id).toBe("group-1");
@@ -128,7 +138,7 @@ describe("subscription writes", () => {
   });
 
   it("requires availability before creating a subscription price", async () => {
-    const fetchImpl = vi.fn(async (url: string | URL | Request) => {
+    const fetchImpl = vi.fn(async (url: string | URL | Request, _init?: RequestInit) => {
       if (String(url).includes("/subscriptionAvailability")) {
         return jsonResponse(
           {
@@ -154,9 +164,13 @@ describe("subscription writes", () => {
     });
 
     expect(result.isError).toBe(true);
-    expect(textOf(result)).toContain("Set subscription availability before setting the initial price");
+    expect(textOf(result)).toContain(
+      "Set subscription availability before setting the initial price",
+    );
     expect(
-      fetchImpl.mock.calls.some((call) => (call[1] as RequestInit | undefined)?.method === "POST"),
+      fetchImpl.mock.calls.some(
+        (call) => (call[1] as RequestInit | undefined)?.method === "POST",
+      ),
     ).toBe(false);
   });
 });

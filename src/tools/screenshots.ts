@@ -1,12 +1,12 @@
 import { createHash } from "node:crypto";
 
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
 
-import type { AppStoreConnectClient, UploadOperation } from "../client/asc.js";
-import { summarizeResponse } from "../client/shape.js";
-import { attributesOf, idOf, isRecord, pollAssetState, readImage } from "./assets.js";
-import { compact, confirmArg, limitArg, wrap } from "./util.js";
+import type { AppStoreConnectClient, UploadOperation } from "#/client/asc";
+import { summarizeResponse } from "#/client/shape";
+import { attributesOf, idOf, isRecord, pollAssetState, readImage } from "#/tools/assets";
+import { compact, confirmArg, limitArg, wrap } from "#/tools/util";
 
 /**
  * Apple's ScreenshotDisplayType enum (spec 3.2). Hardcoded rather than accepted
@@ -222,10 +222,11 @@ export const registerScreenshotTools = (
   server.registerTool(
     "app_store_connect_list_screenshot_sets",
     {
+      title: "App Store Connect: List Screenshot Sets",
       description:
         "List the screenshot sets of one App Store version localization — one set per device " +
         "type (screenshotDisplayType). Returns the set ids you upload into or reorder.",
-      inputSchema: { localizationId: localizationIdArg, limit: limitArg },
+      inputSchema: z.object({ localizationId: localizationIdArg, limit: limitArg }),
       annotations: { readOnlyHint: true },
     },
     async ({ localizationId, limit }) =>
@@ -242,10 +243,11 @@ export const registerScreenshotTools = (
   server.registerTool(
     "app_store_connect_list_screenshots",
     {
+      title: "App Store Connect: List Screenshots",
       description:
         "List the screenshots in one set, in display order, with each file name, upload state " +
         "and image dimensions. Use it to audit what a device type currently shows on the store.",
-      inputSchema: { screenshotSetId: screenshotSetIdArg, limit: limitArg },
+      inputSchema: z.object({ screenshotSetId: screenshotSetIdArg, limit: limitArg }),
       annotations: { readOnlyHint: true },
     },
     async ({ screenshotSetId, limit }) =>
@@ -264,10 +266,11 @@ export const registerScreenshotTools = (
   server.registerTool(
     "app_store_connect_get_screenshot",
     {
+      title: "App Store Connect: Get Screenshot",
       description:
         "Get one screenshot, including its assetDeliveryState — the way to check whether App " +
         "Store Connect finished processing an upload that was still in progress.",
-      inputSchema: { screenshotId: screenshotIdArg },
+      inputSchema: z.object({ screenshotId: screenshotIdArg }),
       annotations: { readOnlyHint: true },
     },
     async ({ screenshotId }) =>
@@ -283,6 +286,7 @@ export const registerScreenshotTools = (
   server.registerTool(
     "app_store_connect_upload_screenshot",
     {
+      title: "App Store Connect: Upload Screenshot",
       description:
         "Upload a screenshot image to an App Store version localization. Runs the whole upload " +
         "flow: finds or creates the set for the device type, reserves the asset, uploads the " +
@@ -290,7 +294,7 @@ export const registerScreenshotTools = (
         "image dimensions during processing, so a wrongly-sized image fails here with the exact " +
         "reason. The version must be editable (PREPARE_FOR_SUBMISSION or DEVELOPER_REJECTED), " +
         "and a set holds at most 10 screenshots.",
-      inputSchema: {
+      inputSchema: z.object({
         localizationId: localizationIdArg,
         displayType: displayTypeArg,
         filePath: z
@@ -329,7 +333,7 @@ export const registerScreenshotTools = (
             "How long to wait for processing to finish (0 = don't wait). Timing out is not a " +
               "failure — the upload has already succeeded at that point.",
           ),
-      },
+      }),
       annotations: { readOnlyHint: false, destructiveHint: false },
     },
     async (args) => wrap(async () => uploadScreenshot(client, args)),
@@ -338,10 +342,11 @@ export const registerScreenshotTools = (
   server.registerTool(
     "app_store_connect_delete_screenshot",
     {
+      title: "App Store Connect: Delete Screenshot",
       description:
         "Delete one screenshot from its set. Use this to remove a screenshot App Store Connect " +
         "rejected during processing, or to make room in a full set.",
-      inputSchema: { screenshotId: screenshotIdArg, confirm: confirmArg },
+      inputSchema: z.object({ screenshotId: screenshotIdArg, confirm: confirmArg }),
       annotations: { readOnlyHint: false, destructiveHint: true },
     },
     async ({ screenshotId }) =>
@@ -354,11 +359,12 @@ export const registerScreenshotTools = (
   server.registerTool(
     "app_store_connect_delete_screenshot_set",
     {
+      title: "App Store Connect: Delete Screenshot Set",
       description:
         "Delete an entire screenshot set, and with it EVERY screenshot for that device type. " +
         "This is the way to replace a device type's screenshots wholesale: delete the set, then " +
         "upload the new images.",
-      inputSchema: { screenshotSetId: screenshotSetIdArg, confirm: confirmArg },
+      inputSchema: z.object({ screenshotSetId: screenshotSetIdArg, confirm: confirmArg }),
       annotations: { readOnlyHint: false, destructiveHint: true },
     },
     async ({ screenshotSetId }) =>
@@ -371,12 +377,13 @@ export const registerScreenshotTools = (
   server.registerTool(
     "app_store_connect_reorder_screenshots",
     {
+      title: "App Store Connect: Reorder Screenshots",
       description:
         "Set the display order of the screenshots in a set — this is the order customers see on " +
         "the App Store, and it is NOT the upload order. WARNING: the ids you pass REPLACE the " +
         "set's full contents, so any screenshot you omit is removed from the set. List the set " +
         "first and pass every id you want to keep.",
-      inputSchema: {
+      inputSchema: z.object({
         screenshotSetId: screenshotSetIdArg,
         screenshotIds: z
           .array(z.string().min(1))
@@ -386,7 +393,7 @@ export const registerScreenshotTools = (
               "removes that screenshot from the set.",
           ),
         confirm: confirmArg,
-      },
+      }),
       annotations: { readOnlyHint: false, destructiveHint: true },
     },
     async ({ screenshotSetId, screenshotIds }) =>

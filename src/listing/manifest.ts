@@ -14,7 +14,7 @@ import {
   sidecarSchema,
   stripTrailingNewline,
   toSidecar,
-} from "./document.js";
+} from "#/listing/document";
 
 export type ManifestFile = { path: string; content: string };
 

@@ -2,9 +2,9 @@ import { gzipSync } from "node:zlib";
 
 import { describe, expect, it, vi } from "vitest";
 
-import { AppStoreConnectClient } from "../src/client/asc.js";
-import type { TokenProvider } from "../src/client/auth.js";
-import { AppStoreConnectApiError } from "../src/client/errors.js";
+import { AppStoreConnectClient } from "#/client/asc";
+import type { TokenProvider } from "#/client/auth";
+import { AppStoreConnectApiError } from "#/client/errors";
 
 const spyProvider = (): TokenProvider & { invalidate: ReturnType<typeof vi.fn> } => ({
   getToken: async () => "jwt-token",

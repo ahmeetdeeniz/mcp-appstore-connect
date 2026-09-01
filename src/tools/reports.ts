@@ -1,14 +1,14 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute } from "node:path";
 
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
 
-import type { AppStoreConnectClient } from "../client/asc.js";
-import { AppStoreConnectApiError } from "../client/errors.js";
-import { attributesOf, type Rec, resourcesOf, summarizeResponse } from "../client/shape.js";
-import type { ToolContext } from "./index.js";
-import { appIdArg, compact, limitArg, PreconditionError, wrap } from "./util.js";
+import type { AppStoreConnectClient } from "#/client/asc";
+import { AppStoreConnectApiError } from "#/client/errors";
+import { attributesOf, type Rec, resourcesOf, summarizeResponse } from "#/client/shape";
+import type { ToolContext } from "#/tools/index";
+import { appIdArg, compact, limitArg, PreconditionError, wrap } from "#/tools/util";
 
 const FREQUENCIES = ["DAILY", "WEEKLY", "MONTHLY", "YEARLY"] as const;
 
@@ -672,6 +672,7 @@ export const registerReportTools = (
   server.registerTool(
     "app_store_connect_get_vendor_number",
     {
+      title: "App Store Connect: Get Vendor Number",
       description:
         "Report the vendor number the sales and finance report tools will use, where it came " +
         "from, and whether this API key can actually read it. Apple exposes no endpoint that " +
@@ -679,7 +680,7 @@ export const registerReportTools = (
         "and verifies it. When none is configured it returns the two places to find one rather " +
         "than failing. Start here when a report tool errors, or when you need to know which " +
         "account the report numbers cover.",
-      inputSchema: {
+      inputSchema: z.object({
         vendorNumber: z
           .string()
           .optional()
@@ -691,7 +692,7 @@ export const registerReportTools = (
             "Download one throwaway daily report to confirm Apple accepts the number. " +
               "Set false to read the configuration without calling Apple.",
           ),
-      },
+      }),
       annotations: { readOnlyHint: true },
     },
     async ({ vendorNumber, verify }) =>
@@ -740,6 +741,7 @@ export const registerReportTools = (
   server.registerTool(
     "app_store_connect_download_sales_report",
     {
+      title: "App Store Connect: Download Sales Report",
       description:
         "Download a sales & trends report (units, proceeds) as TSV. Reports lag ~24h and are " +
         "keyed by date: DAILY needs YYYY-MM-DD, WEEKLY the week-ending Sunday, MONTHLY YYYY-MM, " +
@@ -752,7 +754,7 @@ export const registerReportTools = (
         "more than one Apple Identifier. Units mix first-time downloads with free updates (see " +
         "Product Type Identifier), and Developer Proceeds / Customer Price are per unit, not " +
         "per row. A period with no rows comes back as a 404.",
-      inputSchema: {
+      inputSchema: z.object({
         reportDate: z
           .string()
           .min(1)
@@ -804,7 +806,7 @@ export const registerReportTools = (
               "file written by savePath.",
           ),
         savePath: savePathArg,
-      },
+      }),
       annotations: { readOnlyHint: true },
     },
     async ({
@@ -858,6 +860,7 @@ export const registerReportTools = (
   server.registerTool(
     "app_store_connect_download_finance_report",
     {
+      title: "App Store Connect: Download Finance Report",
       description:
         "Download a financial report (money Apple actually paid, by region) as TSV for one " +
         "fiscal month. This is the authoritative source for proceeds — prefer it over the sales " +
@@ -868,7 +871,7 @@ export const registerReportTools = (
         "because a well-formed report comes back either way, so read the returned `coverage` " +
         "start and end dates before quoting any number from it. A period with no rows, or one " +
         "Apple has not published yet, comes back as a 404.",
-      inputSchema: {
+      inputSchema: z.object({
         reportDate: z
           .string()
           .min(1)
@@ -896,7 +899,7 @@ export const registerReportTools = (
               "file written by savePath.",
           ),
         savePath: savePathArg,
-      },
+      }),
       annotations: { readOnlyHint: true },
     },
     async ({ reportDate, regionCode, vendorNumber, maxLines, savePath }) =>
@@ -938,20 +941,21 @@ export const registerReportTools = (
   server.registerTool(
     "app_store_connect_list_analytics_report_requests",
     {
+      title: "App Store Connect: List Analytics Report Requests",
       description:
         "List an app's existing analytics report requests. Step 1 of reading analytics: a request " +
         "is created once per app and then keeps producing reports, so list first and reuse the id " +
         "rather than creating a second one (Apple rejects a duplicate ONGOING request). Then: " +
         "list_analytics_reports -> list_analytics_report_instances -> " +
         "download_analytics_report_segment.",
-      inputSchema: {
+      inputSchema: z.object({
         appId: appIdArg,
         accessType: z
           .enum(["ONE_TIME_SNAPSHOT", "ONGOING"])
           .optional()
           .describe("Filter by access type. Omit to list both."),
         limit: limitArg,
-      },
+      }),
       annotations: { readOnlyHint: true },
     },
     async ({ appId, accessType, limit }) =>
@@ -968,13 +972,14 @@ export const registerReportTools = (
   server.registerTool(
     "app_store_connect_list_analytics_reports",
     {
+      title: "App Store Connect: List Analytics Reports",
       description:
         "List the reports produced for an analytics report request (step 2). Each report is a " +
         "named dataset — installs and deletions, discovery and engagement, sales, retention — and " +
         "carries no data itself: pass its id to app_store_connect_list_analytics_report_instances " +
         "to reach the dated instances holding the numbers. An empty list means Apple has not " +
         "finished generating them yet (allow a day or two after creating the request).",
-      inputSchema: {
+      inputSchema: z.object({
         reportRequestId: z
           .string()
           .min(1)
@@ -994,7 +999,7 @@ export const registerReportTools = (
           .optional()
           .describe('Filter by exact report name, e.g. "App Store Installation and Deletion".'),
         limit: limitArg,
-      },
+      }),
       annotations: { readOnlyHint: true },
     },
     async ({ reportRequestId, category, name, limit }) =>
@@ -1011,13 +1016,14 @@ export const registerReportTools = (
   server.registerTool(
     "app_store_connect_list_analytics_report_instances",
     {
+      title: "App Store Connect: List Analytics Report Instances",
       description:
         "List the instances of an analytics report (step 3) — one per granularity and processing " +
         "date. Pick the instance you want, then pass its id to " +
         "app_store_connect_download_analytics_report_segment to get the actual rows. Filter by " +
         "granularity first: a report usually has one instance per day, so an unfiltered list is " +
         "mostly noise.",
-      inputSchema: {
+      inputSchema: z.object({
         reportId: z
           .string()
           .min(1)
@@ -1031,7 +1037,7 @@ export const registerReportTools = (
           .optional()
           .describe("Filter to one processing date, as YYYY-MM-DD."),
         limit: limitArg,
-      },
+      }),
       annotations: { readOnlyHint: true },
     },
     async ({ reportId, granularity, processingDate, limit }) =>
@@ -1052,12 +1058,13 @@ export const registerReportTools = (
   server.registerTool(
     "app_store_connect_list_analytics_report_segments",
     {
+      title: "App Store Connect: List Analytics Report Segments",
       description:
         "List the segments of an analytics report instance — the files the data is split across, " +
         "with their compressed size and checksum. Use this to see how large a download will be; " +
         "app_store_connect_download_analytics_report_segment fetches one. The `url` on a segment " +
         "expires within minutes, so re-list rather than reusing an old one.",
-      inputSchema: {
+      inputSchema: z.object({
         instanceId: z
           .string()
           .min(1)
@@ -1066,7 +1073,7 @@ export const registerReportTools = (
               "app_store_connect_list_analytics_report_instances.",
           ),
         limit: limitArg,
-      },
+      }),
       annotations: { readOnlyHint: true },
     },
     async ({ instanceId, limit }) =>
@@ -1083,13 +1090,14 @@ export const registerReportTools = (
   server.registerTool(
     "app_store_connect_download_analytics_report_segment",
     {
+      title: "App Store Connect: Download Analytics Report Segment",
       description:
         "Download the actual analytics data for a report instance (step 4) and return it as text. " +
         "This is the only tool that reaches the numbers — impressions, product page views, " +
         "installs, deletions, sessions, retention, proceeds — depending on which report the " +
         "instance belongs to. Resolves the instance's segments itself, so no expiring url has to " +
         "be passed around. A report split across several segments needs one call per segmentIndex.",
-      inputSchema: {
+      inputSchema: z.object({
         instanceId: z
           .string()
           .min(1)
@@ -1123,7 +1131,7 @@ export const registerReportTools = (
               "Defaults to 25 MiB.",
           ),
         savePath: savePathArg,
-      },
+      }),
       annotations: { readOnlyHint: true },
     },
     async ({ instanceId, segmentIndex, maxLines, maxBytes, savePath }) =>
@@ -1179,6 +1187,7 @@ export const registerReportTools = (
   server.registerTool(
     "app_store_connect_get_analytics_status",
     {
+      title: "App Store Connect: Get Analytics Status",
       description:
         'Answer "is there any analytics data yet" in one call. Walks the whole chain — ' +
         "requests, then reports, then instances — and returns the counts plus the earliest and " +
@@ -1195,7 +1204,7 @@ export const registerReportTools = (
         "app_store_connect_download_analytics_report_segment and look. " +
         "FRAMEWORK_USAGE reports are excluded by default — they are the bulk of the catalogue " +
         "and almost never what a product question is about.",
-      inputSchema: {
+      inputSchema: z.object({
         appId: appIdArg,
         category: z
           .enum(REPORT_CATEGORIES)
@@ -1221,7 +1230,7 @@ export const registerReportTools = (
               "is found or every report has been checked — so a zero is never a floor, which " +
               'is what makes this tool answerable for "is there any data yet".',
           ),
-      },
+      }),
       annotations: { readOnlyHint: true },
     },
     async ({ appId, category, includeFrameworkUsage, maxReportsProbed }) =>
@@ -1372,6 +1381,7 @@ export const registerReportTools = (
   server.registerTool(
     "app_store_connect_create_analytics_report_request",
     {
+      title: "App Store Connect: Create Analytics Report Request",
       description:
         "Request analytics reports for an app — the one-off setup step before any analytics can " +
         "be read. Check app_store_connect_list_analytics_report_requests first: Apple rejects a " +
@@ -1384,10 +1394,10 @@ export const registerReportTools = (
         "it. ONGOING starts collecting from now and backfills nothing. Creating only ONGOING " +
         "therefore silently forfeits the app's entire past, and the loss is invisible — next " +
         "month looks healthy because it has data, while the year before it no longer exists.",
-      inputSchema: {
+      inputSchema: z.object({
         appId: appIdArg,
         accessType: z.enum(["ONE_TIME_SNAPSHOT", "ONGOING"]).default("ONGOING"),
-      },
+      }),
       annotations: { readOnlyHint: false, destructiveHint: false },
     },
     async ({ appId, accessType }) =>

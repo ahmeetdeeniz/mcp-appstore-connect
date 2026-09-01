@@ -1,4 +1,4 @@
-import type { AppStoreConnectClient } from "../client/asc.js";
+import type { AppStoreConnectClient } from "#/client/asc";
 import {
   APP_INFO_ATTRIBUTES,
   VERSION_ATTRIBUTES,
@@ -6,7 +6,7 @@ import {
   type ListingField,
   type LocaleFields,
   digest,
-} from "./document.js";
+} from "#/listing/document";
 
 type Rec = Record<string, unknown>;
 

@@ -346,13 +346,26 @@ for `processingState: VALID`.
 
 ```
 app_store_connect_set_version_build         { versionId, buildId }
+app_store_connect_submit_version_for_review { versionId, dryRun: true, confirm: true }
 app_store_connect_submit_version_for_review { versionId, confirm: true }
 ```
 
 The version must be `PREPARE_FOR_SUBMISSION` or `DEVELOPER_REJECTED`, and the build must
 be `VALID`, unexpired, and carry the same version string. Everything Apple requires —
-screenshots, age rating, export compliance, review details — must already be in place;
-`submit_version_for_review` fails rather than telling you which one is missing.
+screenshots, age rating, export compliance, review details — must already be in place, and
+**`dryRun` is how you find out what is not.** Apple only adjudicates readiness when the
+version is added to a submission, so the dry run goes that far and stops before handing
+anything over, reporting every missing item: an unset primary category, unanswered export
+compliance on the build, unpublished app privacy, missing pricing. Run it. Checking the
+requirements one tool at a time reads a fraction of what it returns, and a real submit
+without it fails naming no cause.
+
+The cost is that staging the version moves it to `READY_FOR_REVIEW`, which is not a
+submittable state and also freezes the build — `set_version_build` refuses it, for attach
+and detach alike. Re-running without `dryRun` finishes that same submission. If the
+preflight says rebuild first, `app_store_connect_remove_version_from_submission` is the way
+back to `PREPARE_FOR_SUBMISSION`; `cancel_review_submission` cannot do it, because the
+draft has never been with Apple.
 
 Approval is not release. A version created with `releaseType: MANUAL` sits in
 `PENDING_DEVELOPER_RELEASE` until someone releases it, which is usually what you want:

@@ -1,8 +1,8 @@
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
 
-import type { AppStoreConnectClient } from "../client/asc.js";
-import { applyListing, type Rejection } from "../listing/apply.js";
+import type { AppStoreConnectClient } from "#/client/asc";
+import { applyListing, type Rejection } from "#/listing/apply";
 import {
   FIELD_LIMITS,
   MetadataRootError,
@@ -10,12 +10,12 @@ import {
   charCount,
   normalizeMetadataRoot,
   sidecarPath,
-} from "../listing/document.js";
-import { fetchListing } from "../listing/fetch.js";
-import { ManifestError, parseManifest, toManifest } from "../listing/manifest.js";
-import { renderReview } from "../listing/review.js";
-import type { ToolContext } from "./index.js";
-import { appIdArg, fail, ok, okText, wrapResult } from "./util.js";
+} from "#/listing/document";
+import { fetchListing } from "#/listing/fetch";
+import { ManifestError, parseManifest, toManifest } from "#/listing/manifest";
+import { renderReview } from "#/listing/review";
+import type { ToolContext } from "#/tools/index";
+import { appIdArg, fail, ok, okText, wrapResult } from "#/tools/util";
 
 const PLATFORMS = ["IOS", "MAC_OS", "TV_OS", "VISION_OS"] as const;
 
@@ -49,6 +49,7 @@ export const registerListingTools = (
   server.registerTool(
     "app_store_connect_export_listing",
     {
+      title: "App Store Connect: Export Listing",
       description:
         "Export an app's complete App Store listing — name, subtitle, description, keywords, " +
         "what's-new, promotional text and URLs, for every locale — as a set of files you can " +
@@ -56,7 +57,7 @@ export const registerListingTools = (
         "deliver uses); pass metadataRoot to write somewhere else. Write them yourself, then " +
         "edit and push back with app_store_connect_apply_listing. Use format 'review' to just " +
         "read the listing.",
-      inputSchema: {
+      inputSchema: z.object({
         appId: appIdArg,
         version: z
           .string()
@@ -81,7 +82,7 @@ export const registerListingTools = (
             `Repo-relative directory to write the metadata tree into. Defaults to ` +
               `${defaultRootLabel}. Use "." for the repo root itself.`,
           ),
-      },
+      }),
       annotations: { readOnlyHint: true },
     },
     async ({ appId, version, platform, locales, format, metadataRoot }) =>
@@ -133,6 +134,7 @@ export const registerListingTools = (
   server.registerTool(
     "app_store_connect_apply_listing",
     {
+      title: "App Store Connect: Apply Listing",
       description:
         "Push an edited App Store listing back to App Store Connect. Pass the metadata files you " +
         `changed plus the tree's ${SIDECAR_BASENAME} — its location is what tells the server ` +
@@ -141,7 +143,7 @@ export const registerListingTools = (
         "false and confirm: true. Fields changed in App Store Connect since the export are " +
         "reported as conflicts and skipped unless you pass force. An empty file clears a field, " +
         "but only with allowClear: true.",
-      inputSchema: {
+      inputSchema: z.object({
         files: z
           .array(
             z.object({
@@ -186,7 +188,7 @@ export const registerListingTools = (
           .default(false)
           .describe("Create localizations for locales in the files but not yet on the version."),
         locales: localesArg,
-      },
+      }),
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
     },
     // `confirm` is a plain boolean rather than the usual confirmArg (z.literal(true))

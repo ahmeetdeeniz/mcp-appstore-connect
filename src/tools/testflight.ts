@@ -15,7 +15,10 @@ const testerIdArg = z
   .min(1)
   .describe("The beta tester id (from app_store_connect_list_beta_testers).");
 
-const buildIdArg = z.string().min(1).describe("The build resource id from app_store_connect_list_builds.");
+const buildIdArg = z
+  .string()
+  .min(1)
+  .describe("The build resource id from app_store_connect_list_builds.");
 
 const betaLocalizationForLocale = async (
   client: AppStoreConnectClient,
@@ -291,11 +294,15 @@ export const registerTestflightTools = (
     },
     async ({ buildId, groupIds }) =>
       wrap(async () => {
-        const current = resourcesOf(await client.get(`/v1/builds/${buildId}/betaGroups`, { limit: 200 }));
-        const existing = new Set(current.map((row) => row.id).filter((id): id is string => typeof id === "string"));
+        const current = resourcesOf(
+          await client.get(`/v1/builds/${buildId}/betaGroups`, { limit: 200 }),
+        );
+        const existing = new Set(
+          current.map((row) => row.id).filter((id): id is string => typeof id === "string"),
+        );
         const added: string[] = [];
         const alreadyPresent: string[] = [];
-        for (const groupId of [...new Set(groupIds)]) {
+        for (const groupId of new Set(groupIds)) {
           if (existing.has(groupId)) {
             alreadyPresent.push(groupId);
             continue;
