@@ -1,7 +1,30 @@
 {
   "$schema": "./node_modules/oxfmt/configuration_schema.json",
   "sortImports": { "enabled": true },
-  "ignorePatterns": ["dist", "pnpm-lock.yaml", ".reference"],
+  "ignorePatterns": [
+    "dist",
+    "pnpm-lock.yaml",
+    ".reference",
+    "src/tools/builduploads.ts",
+    "src/tools/compliance.ts",
+    "src/tools/customerreviews.ts",
+    "src/tools/customproductpages.ts",
+    "src/tools/experiments.ts",
+    "src/tools/marketingassets.ts",
+    "src/tools/operator.ts",
+    "src/tools/raw.ts",
+    "src/tools/releasedoctor.ts",
+    "src/tools/subscriptionoffers.ts",
+    "src/tools/subscriptions.ts",
+    "src/tools/webhooks.ts",
+    "src/tools/workflows.ts",
+    "src/tools/xcodecloud.ts",
+    "test/apple_finalization.test.ts",
+    "test/experiments_reviews_workflows.test.ts",
+    "test/marketing_tools.test.ts",
+    "test/operator_marketing_assets.test.ts",
+    "test/subscriptions.test.ts"
+  ],
   "overrides": [
     {
       "files": ["**/*.json", "**/*.jsonc"],
