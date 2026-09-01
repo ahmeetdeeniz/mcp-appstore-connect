@@ -25,20 +25,9 @@ export const registerComplianceTools = (
   client: AppStoreConnectClient,
   allowWrites: boolean,
 ): void => {
-  server.registerTool(
-    "app_store_connect_get_age_rating_declaration",
-    {
-      description: "Read the app's current App Store age-rating questionnaire answers.",
-      inputSchema: { appId: appIdArg },
-      annotations: { readOnlyHint: true },
-    },
-    async ({ appId }) =>
-      wrap(async () => {
-        const { appInfoId, declaration } = await resolveDeclaration(client, appId);
-        return { appInfoId, id: declaration.id, ...declarationAttributes(declaration) };
-      }),
-  );
-
+  // Upstream v0.22+ registers app_store_connect_get_age_rating_declaration in appinfos.ts.
+  // Keep only the fork's compatibility write helper here so MCP v2 never sees the same
+  // read tool name twice during server construction.
   if (!allowWrites) return;
 
   server.registerTool(
