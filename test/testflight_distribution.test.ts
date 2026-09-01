@@ -60,8 +60,12 @@ describe("TestFlight distribution workflow", () => {
     });
 
     expect(result.isError).not.toBe(true);
-    expect(textOf(result)).toContain('"added": [\n    "group-new"');
-    expect(textOf(result)).toContain('"alreadyPresent": [\n    "group-existing"');
+    const body = JSON.parse(textOf(result)) as {
+      added: string[];
+      alreadyPresent: string[];
+    };
+    expect(body.added).toEqual(["group-new"]);
+    expect(body.alreadyPresent).toEqual(["group-existing"]);
 
     const posts = fetchImpl.mock.calls.filter(
       (call) => (call[1] as RequestInit | undefined)?.method === "POST",
