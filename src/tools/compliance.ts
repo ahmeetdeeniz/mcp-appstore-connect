@@ -2,7 +2,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 
 import type { AppStoreConnectClient } from "../client/asc.js";
-import { resourceOf } from "../client/shape.js";
+import { isRecord, resourceOf } from "../client/shape.js";
 import { appIdArg, confirmArg, PreconditionError, wrap } from "./util.js";
 
 const frequency = z.enum(["NONE", "INFREQUENT_OR_MILD", "FREQUENT_OR_INTENSE"]);
@@ -16,6 +16,9 @@ const resolveDeclaration = async (client: AppStoreConnectClient, appId: string) 
   const declaration = resourceOf(response);
   return { appInfoId: info.id, declaration };
 };
+
+const declarationAttributes = (declaration: Record<string, unknown>): Record<string, unknown> =>
+  isRecord(declaration.attributes) ? declaration.attributes : {};
 
 export const registerComplianceTools = (
   server: McpServer,
@@ -32,7 +35,7 @@ export const registerComplianceTools = (
     async ({ appId }) =>
       wrap(async () => {
         const { appInfoId, declaration } = await resolveDeclaration(client, appId);
-        return { appInfoId, id: declaration.id, ...declaration.attributes };
+        return { appInfoId, id: declaration.id, ...declarationAttributes(declaration) };
       }),
   );
 
@@ -87,7 +90,7 @@ export const registerComplianceTools = (
         if (Object.keys(supplied).length === 0) {
           throw new PreconditionError("Pass at least one age-rating answer to change.", { appId });
         }
-        const attributes = { ...declaration.attributes, ...supplied };
+        const attributes = { ...declarationAttributes(declaration), ...supplied };
         await client.patch(`/v1/ageRatingDeclarations/${declaration.id}`, {
           data: { type: "ageRatingDeclarations", id: declaration.id, attributes },
         });
