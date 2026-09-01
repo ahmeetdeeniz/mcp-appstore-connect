@@ -42,7 +42,9 @@ describe("TestFlight distribution workflow", () => {
     const fetchImpl = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
       if (String(url).includes("/v1/builds/build-1/betaGroups") && !init?.method) {
         return jsonResponse({
-          data: [{ id: "group-existing", type: "betaGroups", attributes: { name: "Internal" } }],
+          data: [
+            { id: "group-existing", type: "betaGroups", attributes: { name: "Internal" } },
+          ],
         });
       }
       return jsonResponse({ data: null });
@@ -69,7 +71,7 @@ describe("TestFlight distribution workflow", () => {
   });
 
   it("refuses a duplicate beta review submission before POSTing", async () => {
-    const fetchImpl = vi.fn(async (url: string | URL | Request) => {
+    const fetchImpl = vi.fn(async (url: string | URL | Request, _init?: RequestInit) => {
       if (String(url).includes("/v1/betaAppReviewSubmissions")) {
         return jsonResponse({
           data: [
