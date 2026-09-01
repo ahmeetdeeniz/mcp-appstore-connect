@@ -27,7 +27,7 @@ const textOf = (result: Awaited<ReturnType<Client["callTool"]>>): string =>
 
 describe("release doctor", () => {
   it("is read-only and reports blockers without staging a review submission", async () => {
-    const fetchImpl = vi.fn(async (input: string | URL | Request) => {
+    const fetchImpl = vi.fn(async (input: string | URL | Request, _init?: RequestInit) => {
       const url = new URL(String(input));
       if (url.pathname === "/v1/appStoreVersions/ver-1") {
         return jsonResponse({
