@@ -40,7 +40,10 @@ const textOf = (result: Awaited<ReturnType<Client["callTool"]>>): string =>
 describe("TestFlight distribution workflow", () => {
   it("only attaches groups the build does not already have", async () => {
     const fetchImpl = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
-      if (String(url).includes("/v1/builds/build-1/betaGroups") && !init?.method) {
+      if (
+        String(url).includes("/v1/builds/build-1/betaGroups") &&
+        (init?.method === undefined || init.method === "GET")
+      ) {
         return jsonResponse({
           data: [
             { id: "group-existing", type: "betaGroups", attributes: { name: "Internal" } },
