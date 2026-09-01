@@ -6,21 +6,6 @@ import { resourceOf } from "../client/shape.js";
 import { appIdArg, confirmArg, PreconditionError, wrap } from "./util.js";
 
 const frequency = z.enum(["NONE", "INFREQUENT_OR_MILD", "FREQUENT_OR_INTENSE"]);
-const fields = [
-  "violenceCartoonOrFantasy",
-  "violenceRealistic",
-  "violenceRealisticProlongedGraphicOrSadistic",
-  "profanityOrCrudeHumor",
-  "matureOrSuggestiveThemes",
-  "horrorOrFearThemes",
-  "medicalOrTreatmentInformation",
-  "alcoholTobaccoOrDrugUseOrReferences",
-  "gunsOrOtherWeapons",
-  "sexualContentOrNudity",
-  "sexualContentGraphicAndNudity",
-  "gamblingSimulated",
-  "contests",
-] as const;
 
 const resolveDeclaration = async (client: AppStoreConnectClient, appId: string) => {
   const infos = await client.get(`/v1/apps/${appId}/appInfos`, { limit: 50 });
@@ -44,10 +29,11 @@ export const registerComplianceTools = (
       inputSchema: { appId: appIdArg },
       annotations: { readOnlyHint: true },
     },
-    async ({ appId }) => wrap(async () => {
-      const { appInfoId, declaration } = await resolveDeclaration(client, appId);
-      return { appInfoId, id: declaration.id, ...(declaration.attributes ?? {}) };
-    }),
+    async ({ appId }) =>
+      wrap(async () => {
+        const { appInfoId, declaration } = await resolveDeclaration(client, appId);
+        return { appInfoId, id: declaration.id, ...declaration.attributes };
+      }),
   );
 
   if (!allowWrites) return;
@@ -81,25 +67,31 @@ export const registerComplianceTools = (
         parentalControls: z.boolean().optional(),
         ageAssurance: z.boolean().optional(),
         userGeneratedContent: z.boolean().optional(),
-        kidsAgeBand: z.enum(["FIVE_AND_UNDER", "SIX_TO_EIGHT", "NINE_TO_ELEVEN"]).nullable().optional(),
+        kidsAgeBand: z
+          .enum(["FIVE_AND_UNDER", "SIX_TO_EIGHT", "NINE_TO_ELEVEN"])
+          .nullable()
+          .optional(),
         additionalDeclarations: z.record(z.string(), z.unknown()).optional(),
         confirm: confirmArg,
       },
       annotations: { readOnlyHint: false, destructiveHint: true },
     },
-    async (input) => wrap(async () => {
-      const { appId, additionalDeclarations, ...rest } = input;
-      const { declaration } = await resolveDeclaration(client, appId);
-      const supplied = Object.fromEntries(Object.entries(rest).filter(([k, v]) => k !== "confirm" && v !== undefined));
-      if (additionalDeclarations) Object.assign(supplied, additionalDeclarations);
-      if (Object.keys(supplied).length === 0) {
-        throw new PreconditionError("Pass at least one age-rating answer to change.", { appId });
-      }
-      const attributes = { ...(declaration.attributes ?? {}), ...supplied };
-      await client.patch(`/v1/ageRatingDeclarations/${declaration.id}`, {
-        data: { type: "ageRatingDeclarations", id: declaration.id, attributes },
-      });
-      return { updated: Object.keys(supplied), declarationId: declaration.id };
-    }),
+    async (input) =>
+      wrap(async () => {
+        const { appId, additionalDeclarations, ...rest } = input;
+        const { declaration } = await resolveDeclaration(client, appId);
+        const supplied = Object.fromEntries(
+          Object.entries(rest).filter(([key, value]) => key !== "confirm" && value !== undefined),
+        );
+        if (additionalDeclarations) Object.assign(supplied, additionalDeclarations);
+        if (Object.keys(supplied).length === 0) {
+          throw new PreconditionError("Pass at least one age-rating answer to change.", { appId });
+        }
+        const attributes = { ...declaration.attributes, ...supplied };
+        await client.patch(`/v1/ageRatingDeclarations/${declaration.id}`, {
+          data: { type: "ageRatingDeclarations", id: declaration.id, attributes },
+        });
+        return { updated: Object.keys(supplied), declarationId: declaration.id };
+      }),
   );
 };
