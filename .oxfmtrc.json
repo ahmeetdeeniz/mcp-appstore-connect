@@ -23,7 +23,8 @@
     "test/experiments_reviews_workflows.test.ts",
     "test/marketing_tools.test.ts",
     "test/operator_marketing_assets.test.ts",
-    "test/subscriptions.test.ts"
+    "test/subscriptions.test.ts",
+    "test/testflight_distribution.test.ts"
   ],
   "overrides": [
     {
