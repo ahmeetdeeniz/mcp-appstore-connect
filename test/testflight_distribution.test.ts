@@ -71,20 +71,22 @@ describe("TestFlight distribution workflow", () => {
   });
 
   it("refuses a duplicate beta review submission before POSTing", async () => {
-    const fetchImpl = vi.fn(async (url: string | URL | Request, _init?: RequestInit) => {
-      if (String(url).includes("/v1/betaAppReviewSubmissions")) {
-        return jsonResponse({
-          data: [
-            {
-              id: "review-1",
-              type: "betaAppReviewSubmissions",
-              attributes: { betaReviewState: "WAITING_FOR_REVIEW" },
-            },
-          ],
-        });
-      }
-      return jsonResponse({ data: [] });
-    });
+    const fetchImpl = vi.fn(
+      async (url: string | URL | Request, _init?: RequestInit) => {
+        if (String(url).includes("/v1/betaAppReviewSubmissions")) {
+          return jsonResponse({
+            data: [
+              {
+                id: "review-1",
+                type: "betaAppReviewSubmissions",
+                attributes: { betaReviewState: "WAITING_FOR_REVIEW" },
+              },
+            ],
+          });
+        }
+        return jsonResponse({ data: [] });
+      },
+    );
     const client = await connect(fetchImpl as unknown as typeof fetch);
 
     const result = await client.callTool({
