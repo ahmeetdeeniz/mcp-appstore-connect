@@ -138,7 +138,7 @@ describe("subscription writes", () => {
   });
 
   it("requires availability before creating a subscription price", async () => {
-    const fetchImpl = vi.fn(async (url: string | URL | Request) => {
+    const fetchImpl = vi.fn(async (url: string | URL | Request, _init?: RequestInit) => {
       if (String(url).includes("/subscriptionAvailability")) {
         return jsonResponse(
           {
