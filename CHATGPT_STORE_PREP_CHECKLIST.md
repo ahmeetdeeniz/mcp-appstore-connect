@@ -10,11 +10,13 @@ Use this on the day the ChatGPT Business workspace is enabled.
 - [ ] App Store Connect API key/config is available locally; `.p8` stays local.
 - [ ] `scripts/check-chatgpt-ready.ps1` passes.
 - [ ] `scripts/chatgpt-tunnel.ps1` connects read-only and `tunnel-client runtimes status app-store-connect --json` reports ready.
-- [ ] ChatGPT custom app is created using Connection: Tunnel and the same tunnel id.
+- [ ] Optional temporary read-only developer-mode app is used only for smoke testing, not as the final published app.
 - [ ] Read-only smoke: auth status, app/version/build lookup and release doctor are correct.
 - [ ] Reconnect with `scripts/chatgpt-tunnel.ps1 -Writes`.
-- [ ] Re-scan tools in ChatGPT; write tools are visible.
+- [ ] Create/refresh the final developer-mode custom app using Connection: Tunnel and the same tunnel id.
+- [ ] Confirm the final discovery snapshot contains the intended write tools before publishing.
+- [ ] Publish the final Business app only after the read/write tool surface is stable.
 - [ ] Dry-run listing/screenshot smoke targets the intended editable version only.
 - [ ] Store Prep skill/instructions are installed from `STORE_PREP_SKILL.md`.
-- [ ] Canva connector is connected and can create/export the intended store artwork.
+- [ ] Canva connector is connected and can create the intended store artwork.
 - [ ] Final Submit for Review / release actions remain user-controlled.
