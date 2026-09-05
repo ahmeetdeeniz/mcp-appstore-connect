@@ -56,12 +56,17 @@ Then, in ChatGPT Business, enable Developer Mode, create a custom MCP app, choos
 
 ## Recommended activation sequence
 
-1. Connect with `APP_STORE_CONNECT_ALLOW_WRITES` unset.
-2. Verify `app_store_connect_auth_status`, app lookup and release-doctor reads.
-3. Verify the intended App Store Connect app/version/build.
+Business freezes the published app's discovered tool surface. Do not publish a read-only snapshot and expect write tools to appear later.
+
+1. Connect with `APP_STORE_CONNECT_ALLOW_WRITES` unset and validate the local/tunnel runtime first.
+2. Optionally create a temporary developer-mode read-only app for smoke testing, but do not publish it as the final app.
+3. Verify `app_store_connect_auth_status`, the intended app/version/build and release-doctor reads.
 4. Enable `APP_STORE_CONNECT_ALLOW_WRITES=1` and reconnect the local runtime.
-5. Re-scan the custom app tools in ChatGPT so write tools become visible.
-6. Keep final `Submit for Review` / release actions user-controlled.
+5. Create/refresh the **final** developer-mode custom app only after the write tools are visible in discovery.
+6. Review the complete read/write tool surface and publish that final snapshot once.
+7. Keep final `Submit for Review` / release actions user-controlled.
+
+If the final MCP tool schema changes after Business publication, recreate/republish the custom app rather than assuming ChatGPT will automatically pick up the new schema.
 
 ## Store Prep workflow
 
