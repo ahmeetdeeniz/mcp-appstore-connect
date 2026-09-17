@@ -391,6 +391,18 @@ xcrun altool --upload-app  -f build/export/App.pkg -t macos \
   --apiKey <KEY_ID> --apiIssuer <ISSUER_ID>
 ```
 
+**Those are the macOS incantations, and every one of them changes for iOS**: the
+destination is `generic/platform=iOS`, the artifact is a `.ipa` rather than a `.pkg`, and
+`altool` wants `-t ios`. A universal app ships *two* builds from one source tree, and they
+are separate uploads, separate `processingState`s and separate versions on App Store
+Connect. Give them their own archive paths — one `-archivePath` used twice silently
+overwrites the first archive with the second.
+
+Check the repo first, though. A project that already ships both platforms usually has
+this wired: `make export-mac` / `make export-ios`, or a `Scripts/` helper. Use it rather
+than retyping the commands, because it already knows the export options plist, the
+derived-data split and the artifact names.
+
 `exportOptions.plist` needs `method = app-store-connect` (older Xcode called it
 `app-store`), the `teamID`, and `manageAppVersionAndBuildNumber = false` — leave that true
 and Xcode silently renumbers the build out from under you.
