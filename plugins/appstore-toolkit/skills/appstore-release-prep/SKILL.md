@@ -251,6 +251,23 @@ full recapture plus a re-upload of a screenshot set that was already complete. T
 check exists to catch machine-sounding _prose_ — description, release notes, promo
 text, subtitle. Hold that line there.
 
+**What is worth checking in the screenshot config is whether the app can reach what the
+picture shows.** This is content, not voice, and no exemption covers it. A staging
+harness drives the app by setting view state directly rather than by tapping through it,
+so it will cheerfully photograph a screen whose only entry point is behind an
+`#if os(macOS)` — and the store page then sells a feature that platform does not have.
+That is a review risk and a refund risk, and it is invisible in the config, in the
+goldens and in the diff, because the capture is real. It bites hardest when one app
+ships two platforms from one target and the screenshot configs were cloned from each
+other.
+
+So when a repo has more than one screenshot config, take each screen id and find the
+thing that *opens* it — the toolbar item, the menu entry, the context-menu button — and
+check that it is not compiled out on that platform. Grep the entry point, not the sheet:
+the sheet is usually cross-platform and still present in the binary as dead code, so
+`strings` on the artifact proves nothing either way. Driving the built app in a simulator
+is the check that actually settles it.
+
 Also keep hardcoded prices out of copy where you can — a `$4.99` in the description is
 wrong in most storefronts.
 

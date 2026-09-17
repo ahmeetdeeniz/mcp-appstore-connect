@@ -795,13 +795,28 @@ def screenshot_sync(repo, config_rel, store_rel="APPSTORE.md"):
     }
 
 
-def find_screenshot_config(repo):
+def find_screenshot_configs(repo):
+    """Every screenshot config in the repo, repo-relative, sorted.
+
+    A list rather than the first hit, because a multi-platform repo has one per
+    platform (`screenshots.config.json` and `screenshots.ios.config.json`) and
+    os.walk has no meaningful order: picking the first reported the iOS config
+    while auditing the Mac listing, and named a screen count belonging to the
+    other platform. That is the `.listing.json` ambiguity again, which this
+    script already refuses to guess at -- but this section is advisory rather
+    than a gate, so reporting all of them beats refusing to report any.
+
+    A manifest is not a config: `golden/manifest.json` sits under a directory
+    whose name contains "screenshot" in some layouts, and it carries hashes, not
+    taglines.
+    """
+    out = []
     for root, dirs, files in os.walk(repo):
         dirs[:] = [d for d in dirs if not d.startswith(".") and d != "node_modules"]
         for f in files:
-            if "screenshot" in f.lower() and f.endswith(".json"):
-                return os.path.relpath(os.path.join(root, f), repo)
-    return None
+            if "screenshot" in f.lower() and f.endswith(".json") and f != "manifest.json":
+                out.append(os.path.relpath(os.path.join(root, f), repo))
+    return sorted(out)
 
 
 # --------------------------------------------------------------------------
@@ -831,7 +846,7 @@ def audit(repo, fields_file=None, live_fields=None, locale=None, metadata_root=N
         v["version"] == shipping and v["date"] for v in cl["versions"]
     ) if shipping else False
 
-    cfg = find_screenshot_config(repo)
+    cfgs = find_screenshot_configs(repo)
     # A fastlane metadata tree is unambiguous, so prefer it; an explicit
     # --fields-file still wins, and a project without the tree keeps the
     # markdown-doc parser it has always used.
@@ -879,7 +894,7 @@ def audit(repo, fields_file=None, live_fields=None, locale=None, metadata_root=N
         "live": live,
         "em_dashes": scan_em_dashes(repo, prose),
         "em_dashes_changelog": scan_em_dashes(repo, ["CHANGELOG.md"]),
-        "screenshots": screenshot_sync(repo, cfg, store_doc) if cfg else None,
+        "screenshots": [screenshot_sync(repo, c, store_doc) for c in cfgs],
     }
 
 
@@ -1006,8 +1021,7 @@ def report(a):
         L.append(f"  ({len(cl_em)} more in CHANGELOG.md -- developer-facing, so optional)")
     L.append("")
 
-    sc = a["screenshots"]
-    if sc:
+    for sc in a["screenshots"] or []:
         L.append(f"SCREENSHOTS  ({sc['config']})")
         if sc.get("error"):
             L.append(f"  ! {sc['error']}")
@@ -1022,6 +1036,11 @@ def report(a):
                 L.append(f"      {d['screen']}.{d['key']}: {d['config_value'][:80]}")
         else:
             L.append(f"  {len(sc['screens'])} screen(s), in sync with the doc")
+    if len(a["screenshots"] or []) > 1:
+        L.append("  Several configs: each drives its own platform's store images, and a screen")
+        L.append("  present here is NOT proof the feature is reachable on that platform. A")
+        L.append("  staging harness that sets view state directly will photograph a screen whose")
+        L.append("  only entry point is behind an #if, so check the entry point, not the capture.")
     return "\n".join(L)
 
 
