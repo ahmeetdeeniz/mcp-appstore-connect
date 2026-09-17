@@ -189,6 +189,15 @@ optional, and a **first** version must not carry release notes at all (Apple rej
 What's New on 1.0). The audit distinguishes these: `MISSING` gates the release, `unset` is
 just telling you the field is empty.
 
+**"First" is per platform, and the changelog cannot see that.** One repo ships a Mac and
+an iOS build from one target and one `CHANGELOG.md`, so the first *iOS* version can be
+1.8.1 with fourteen entries above it. The audit reads the changelog, finds a previous
+release, and gates on a `MISSING WHAT'S NEW` that Apple will not accept if you write it.
+Pass `--first-release` for that tree. Nothing offline can tell the two cases apart — the
+sidecar records the platform but not whether the platform has shipped before — so this
+one is yours to assert. `app_store_connect_list_versions --platform IOS` settles it: one
+version and no `READY_FOR_SALE` among them means it is the first.
+
 In a metadata tree, each field is its own file under `<root>/<locale>/` (the audit
 header tells you the root; `fastlane/metadata/` or `Listing/` by default):
 `release_notes.txt` (What's New), `promotional_text.txt`, `description.txt`,

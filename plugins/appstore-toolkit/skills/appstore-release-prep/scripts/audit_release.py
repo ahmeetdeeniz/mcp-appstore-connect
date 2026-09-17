@@ -46,6 +46,15 @@ FIELD_LIMITS = {
 # rather than "nobody wrote it" (see manifest.ts). WHAT'S NEW is required too,
 # but only once there is a previous release -- Apple rejects release notes on a
 # first version, so audit() drops it from this set for a 1.0.
+#
+# "First" is per PLATFORM, and the CHANGELOG cannot see that. One repo ships a
+# Mac and an iOS build from one target and one CHANGELOG, so the first iOS
+# version can be 1.8.1 with fourteen entries above it: `last_released` is set,
+# WHAT'S NEW is demanded, and the gate fails on copy Apple will not accept.
+# Nothing offline distinguishes that case -- the sidecar records the platform
+# but not whether the platform has shipped before -- so --first-release says so
+# explicitly, and the MISSING line points at it rather than leaving the reader
+# to argue with a red gate.
 REQUIRED_FIELDS = {"DESCRIPTION", "KEYWORDS", "SUBTITLE", "WHAT'S NEW"}
 
 # Header aliases -> canonical field name.
@@ -802,7 +811,8 @@ def version_key(v):
     return tuple(int(p) if p.isdigit() else 0 for p in v.split("."))
 
 
-def audit(repo, fields_file=None, live_fields=None, locale=None, metadata_root=None):
+def audit(repo, fields_file=None, live_fields=None, locale=None, metadata_root=None,
+          first_release=False):
     versions = read_versions(repo)
     cl = parse_changelog(repo)
     dated = [v for v in cl["versions"] if v["version"].lower() != "unreleased" and v["date"]]
@@ -848,7 +858,7 @@ def audit(repo, fields_file=None, live_fields=None, locale=None, metadata_root=N
     # but Apple rejects a "What's New" on a first version -- so demanding one for a
     # 1.0 would gate the release on copy that must not exist.
     required = set(REQUIRED_FIELDS)
-    if not last_released:
+    if not last_released or first_release:
         required.discard("WHAT'S NEW")
     for entry in store["locales"]:
         entry["missing_required"] = sorted(required - set(entry["fields"]))
@@ -948,6 +958,14 @@ def report(a):
         for name in entry["missing"]:
             tag = "MISSING " if name in entry.get("missing_required", []) else "unset   "
             L.append(f"  {tag}{name:<16} (limit {FIELD_LIMITS[name]})")
+            # The one MISSING that is routinely a false positive, because the
+            # changelog cannot see per-platform history. Say so here rather than
+            # letting a red gate argue with someone who is already right.
+            if name == "WHAT'S NEW" and name in entry.get("missing_required", []):
+                L.append("       - if this is the FIRST version on this platform, Apple shows no")
+                L.append("         What's New and the field must stay empty: re-run with")
+                L.append("         --first-release. A new platform in an existing app hits this,")
+                L.append("         since its first version inherits the app's version number.")
         if entry["edited_since_export"]:
             files = [entry["fields"][n]["file"] for n in entry["edited_since_export"]]
             L.append("  * edited since export, pass these to apply_listing:")
@@ -1018,6 +1036,13 @@ def main():
                     help="Narrow the audit to ONE locale under the metadata root. Every locale "
                          "is audited by default, because apply_listing refuses the whole push if "
                          "any single locale is over limit.")
+    ap.add_argument("--first-release", action="store_true",
+                    help="This is the FIRST version for this platform, so Apple shows no "
+                         "What's New and the field must stay empty. Needed when the repo "
+                         "ships several platforms from one CHANGELOG: a new platform's "
+                         "first version can carry a high version number with a long "
+                         "release history above it, which the changelog cannot tell apart "
+                         "from an ordinary update.")
     ap.add_argument("--metadata-root", default=None,
                     help="Repo-relative path to the metadata tree. Auto-detected from a "
                          ".listing.json, else fastlane/metadata or Listing; a tree elsewhere with "
@@ -1043,7 +1068,7 @@ def main():
             live_fields = row.get("attributes", row)
 
     a = audit(repo, fields_file=args.fields_file, live_fields=live_fields, locale=args.locale,
-              metadata_root=args.metadata_root)
+              metadata_root=args.metadata_root, first_release=args.first_release)
     if args.json:
         json.dump(a, sys.stdout, indent=2)
         print()
