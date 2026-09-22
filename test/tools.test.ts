@@ -184,6 +184,7 @@ describe("tool registration", () => {
       "app_store_connect_update_iap_localization",
       "app_store_connect_delete_iap_localization",
       "app_store_connect_upload_iap_review_screenshot",
+      "app_store_connect_delete_iap_review_screenshot",
       "app_store_connect_submit_in_app_purchase_for_review",
       "app_store_connect_create_bundle_id",
       "app_store_connect_enable_capability",

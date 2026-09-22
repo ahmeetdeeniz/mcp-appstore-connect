@@ -739,9 +739,34 @@ export const registerIapTools = (
           failureHint:
             "A review screenshot must be a screenshot of the purchase inside your app, at a " +
             "supported device resolution and with no alpha channel.",
-          deleteToolName: "app_store_connect_get_iap_review_screenshot (then delete it in the UI)",
+          deleteToolName: "app_store_connect_delete_iap_review_screenshot",
           pollToolName: "app_store_connect_get_iap_review_screenshot",
         });
+      }),
+  );
+
+  server.registerTool(
+    "app_store_connect_delete_iap_review_screenshot",
+    {
+      title: "App Store Connect: Delete IAP Review Screenshot",
+      description:
+        "Remove the review screenshot attached to an in-app purchase — the way to clear one App " +
+        "Store Connect rejected during processing, or a wrong image, before uploading another. " +
+        "Takes the inAppPurchase id and looks the screenshot up itself. Deleting it puts the IAP " +
+        "back into `MISSING_METADATA` until a new one is uploaded.",
+      inputSchema: z.object({ inAppPurchaseId: inAppPurchaseIdArg, confirm: confirmArg }),
+      annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true },
+    },
+    async ({ inAppPurchaseId }) =>
+      wrap(async () => {
+        const screenshotId = idOf(
+          await getOrNull(client, `/v2/inAppPurchases/${inAppPurchaseId}/appStoreReviewScreenshot`),
+        );
+        if (!screenshotId) {
+          return { deleted: null, inAppPurchaseId, note: "No review screenshot was attached." };
+        }
+        await client.del(`/v1/inAppPurchaseAppStoreReviewScreenshots/${screenshotId}`);
+        return { deleted: screenshotId, inAppPurchaseId };
       }),
   );
 
