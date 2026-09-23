@@ -1504,6 +1504,55 @@ describe("submit_version_for_review", () => {
     expect(JSON.parse(String(submit?.[1].body)).data.attributes).toEqual({ submitted: true });
   });
 
+  /**
+   * The bug this guards: resolving the rejected item elsewhere (a Resolution Center reply, the
+   * web UI) moves the version to READY_FOR_REVIEW while the submission stays UNRESOLVED_ISSUES.
+   * The state guard refused that version before the resubmit branch ran, so the only API route
+   * left was pulling it out of the rejected submission, gambling its queue position.
+   */
+  it("resubmits a returned submission whose version was already resolved", async () => {
+    const fetchImpl = routed({
+      version: (withApp) => versionBody({ appStoreState: "READY_FOR_REVIEW" }, {}, withApp),
+      returned: [submission("UNRESOLVED_ISSUES")],
+      items: [{ ...stagedItem, attributes: { state: "READY_FOR_REVIEW", resolved: true } }],
+    });
+
+    const result = await callTool({ versionId: VERSION_ID, confirm: true }, fetchImpl);
+
+    expect(result.isError).toBeFalsy();
+    expect(postCall(fetchImpl, "/v1/reviewSubmissions")).toBeUndefined();
+    expect(postCall(fetchImpl, "/v1/reviewSubmissionItems")).toBeUndefined();
+    const patches = fetchImpl.mock.calls.filter(
+      (call) => (call[1] as RequestInit | undefined)?.method === "PATCH",
+    ) as [string, RequestInit][];
+    // Nothing left to resolve, and nothing removed: only the submission is sent back.
+    expect(patches).toHaveLength(1);
+    expect(patches[0]?.[0]).toBe(
+      `https://api.appstoreconnect.apple.com/v1/reviewSubmissions/${SUBMISSION_ID}`,
+    );
+    expect(JSON.parse(String(patches[0]?.[1].body)).data.attributes).toEqual({ submitted: true });
+    expect(
+      fetchImpl.mock.calls.some(
+        (call) => (call[1] as RequestInit | undefined)?.method === "DELETE",
+      ),
+    ).toBe(false);
+    expect(JSON.parse(textOf(result)).resubmitted).toBe(true);
+  });
+
+  it("still refuses a READY_FOR_REVIEW version no returned submission holds", async () => {
+    const fetchImpl = routed({
+      version: (withApp) => versionBody({ appStoreState: "READY_FOR_REVIEW" }, {}, withApp),
+      returned: [submission("UNRESOLVED_ISSUES")],
+      items: [],
+    });
+
+    const result = await callTool({ versionId: VERSION_ID, confirm: true }, fetchImpl);
+
+    expect(result.isError).toBeTruthy();
+    expect(textOf(result)).toContain("READY_FOR_REVIEW");
+    expect(patchCall(fetchImpl)).toBeUndefined();
+  });
+
   it("refuses to resubmit when the rejected submission holds another version", async () => {
     const fetchImpl = routed({
       returned: [

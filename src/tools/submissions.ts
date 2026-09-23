@@ -195,6 +195,118 @@ const findStagedDraft = async (
   (await findStaged(client, versionResponse, versionId))?.submissionId;
 
 /**
+ * The app's returned (UNRESOLVED_ISSUES) submission that already holds this
+ * version as a resolved item, if there is one.
+ *
+ * ⚠️ Consulted before `assertSubmittable`, for the same reason as `findStaged`.
+ * Resolving the rejected item — which a Resolution Center reply or the web UI's
+ * "Update review" does, as well as a half-finished run of this tool — moves the
+ * version to READY_FOR_REVIEW while the submission stays UNRESOLVED_ISSUES. The
+ * state guard refuses that version, so without this the only API route left is
+ * pulling the version out of the rejected submission, which risks its queue slot.
+ */
+const findResolvedInReturned = async (
+  client: AppStoreConnectClient,
+  versionResponse: unknown,
+  versionId: string,
+): Promise<string | undefined> => {
+  const version = resourceOf(versionResponse);
+  const attrs = attributesOf(version);
+  if (attrs.appStoreState !== STAGED_VERSION_STATE) return undefined;
+
+  const appId = relatedId(version, "app");
+  const platform = attrs.platform;
+  if (typeof appId !== "string" || typeof platform !== "string") return undefined;
+
+  const returned = resourcesOf(
+    await client.get(`/v1/apps/${appId}/reviewSubmissions`, {
+      "filter[platform]": platform,
+      "filter[state]": RETURNED_STATE,
+      include: "appStoreVersionForReview",
+      limit: 10,
+    }),
+  );
+  for (const submission of returned) {
+    const submissionId = String(submission.id);
+    // Positive evidence only: a READY_FOR_REVIEW version is not submittable, so
+    // resubmitting on a guess would bypass the guard for somebody else's version.
+    if (relatedId(submission, "appStoreVersionForReview") === versionId) return submissionId;
+    const items = await client.get(`/v1/reviewSubmissions/${submissionId}/items`, {
+      include: "appStoreVersion",
+      limit: 50,
+    });
+    if (containsVersion(items, versionId)) return submissionId;
+  }
+  return undefined;
+};
+
+/**
+ * Send a submission Apple handed back (UNRESOLVED_ISSUES) back to it: resolve
+ * whatever items are still rejected, then submit that same submission again.
+ */
+const resubmitReturned = async (
+  client: AppStoreConnectClient,
+  submissionId: string,
+  versionId: string,
+  dryRun: boolean,
+): Promise<unknown> => {
+  const items = resourcesOf(
+    await client.get(`/v1/reviewSubmissions/${submissionId}/items`, {
+      include: "appStoreVersion",
+      limit: 50,
+    }),
+  );
+
+  // Only the rejected items are touched. The others are still READY_FOR_REVIEW
+  // from the first submission, or already resolved, and go back untouched —
+  // that is how an in-app purchase keeps the review it had already started
+  // rather than beginning again.
+  const rejected = items.filter((item) => attributesOf(item).state === REJECTED_ITEM_STATE);
+
+  // ⚠️ Nothing is written on a dry run of this branch. Unlike the draft path,
+  // where staging the item IS the preflight Apple answers, resolving items
+  // here buys no diagnostic — and the PATCH after it hands the submission
+  // straight back to Apple. A dryRun that resubmits is the one thing the
+  // flag exists to prevent.
+  if (dryRun) {
+    return {
+      submissionId,
+      versionId,
+      resubmitted: false,
+      dryRun: true,
+      submitted: false,
+      wouldResolveItems: rejected.length,
+      note:
+        "This app has a rejected submission holding this version. Re-running without " +
+        "dryRun resolves its rejected item(s) and sends the same submission back, " +
+        "keeping its queue position. Nothing has been written.",
+    };
+  }
+
+  for (const item of rejected) {
+    await client.patch(`/v1/reviewSubmissionItems/${String(item.id)}`, {
+      data: {
+        type: "reviewSubmissionItems",
+        id: String(item.id),
+        attributes: { resolved: true },
+      },
+    });
+  }
+
+  const resubmitted = await client.patch(`/v1/reviewSubmissions/${submissionId}`, {
+    data: { type: "reviewSubmissions", id: submissionId, attributes: { submitted: true } },
+  });
+
+  return {
+    submissionId,
+    versionId,
+    resubmitted: true,
+    resolvedItems: rejected.length,
+    submission: summarizeResponse(resubmitted),
+  };
+};
+
+/**
  * Read the version and report every reason it cannot be submitted at once. Apple
  * answers an unsubmittable version with a generic error that names no cause, and
  * a caller with two problems should learn both in one round trip.
@@ -303,7 +415,10 @@ export const registerSubmissionTools = (
         "Also handles resubmitting after a rejection: when the app's submission came back " +
         "UNRESOLVED_ISSUES, this resolves the rejected items and sends that same submission " +
         "back, which keeps its queue position and leaves any in-app purchase already under " +
-        "review where it is. Do NOT cancel a rejected submission to start a clean one. " +
+        "review where it is. That includes a version already READY_FOR_REVIEW inside the " +
+        "rejected submission because its item was resolved elsewhere (a Resolution Center " +
+        "reply, the web UI): it is sent back as is, not pulled out. " +
+        "Do NOT cancel a rejected submission to start a clean one. " +
         "Once submitted the version is with Apple — use " +
         "app_store_connect_cancel_review_submission to withdraw it. " +
         "Pass dryRun to preflight instead: it stops before handing anything to Apple, and when " +
@@ -363,6 +478,15 @@ export const registerSubmissionTools = (
           };
         }
 
+        // The same lockout from the other side: the rejected item was resolved
+        // (Resolution Center reply, the web UI, or an earlier run of this tool
+        // that stopped short), leaving the version READY_FOR_REVIEW inside the
+        // returned submission. Sending that submission back is all that is left.
+        const resolvedIn = await findResolvedInReturned(client, versionResponse, versionId);
+        if (resolvedIn !== undefined) {
+          return resubmitReturned(client, resolvedIn, versionId, dryRun);
+        }
+
         const { appId, platform } = assertSubmittable(versionResponse);
 
         // A rejection comes back as a submission the developer owns again, and
@@ -396,60 +520,7 @@ export const registerSubmissionTools = (
             );
           }
 
-          const items = resourcesOf(
-            await client.get(`/v1/reviewSubmissions/${submissionId}/items`, {
-              include: "appStoreVersion",
-              limit: 50,
-            }),
-          );
-
-          // Only the rejected items are touched. The others are still
-          // READY_FOR_REVIEW from the first submission and go back untouched —
-          // that is how an in-app purchase keeps the review it had already
-          // started rather than beginning again.
-          const rejected = items.filter((item) => attributesOf(item).state === REJECTED_ITEM_STATE);
-
-          // ⚠️ Nothing is written on a dry run of this branch. Unlike the draft path,
-          // where staging the item IS the preflight Apple answers, resolving items
-          // here buys no diagnostic — and the PATCH after it hands the submission
-          // straight back to Apple. A dryRun that resubmits is the one thing the
-          // flag exists to prevent.
-          if (dryRun) {
-            return {
-              submissionId,
-              versionId,
-              resubmitted: false,
-              dryRun: true,
-              submitted: false,
-              wouldResolveItems: rejected.length,
-              note:
-                "This app has a rejected submission holding this version. Re-running without " +
-                "dryRun resolves its rejected item(s) and sends the same submission back, " +
-                "keeping its queue position. Nothing has been written.",
-            };
-          }
-
-          for (const item of rejected) {
-            await client.patch(`/v1/reviewSubmissionItems/${String(item.id)}`, {
-              data: {
-                type: "reviewSubmissionItems",
-                id: String(item.id),
-                attributes: { resolved: true },
-              },
-            });
-          }
-
-          const resubmitted = await client.patch(`/v1/reviewSubmissions/${submissionId}`, {
-            data: { type: "reviewSubmissions", id: submissionId, attributes: { submitted: true } },
-          });
-
-          return {
-            submissionId,
-            versionId,
-            resubmitted: true,
-            resolvedItems: rejected.length,
-            submission: summarizeResponse(resubmitted),
-          };
+          return resubmitReturned(client, submissionId, versionId, dryRun);
         }
 
         // One submission per app+platform: an in-flight one has to be cancelled
