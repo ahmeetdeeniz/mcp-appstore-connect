@@ -90,6 +90,12 @@ const submissionIdArg = z
  * Everything a review submission item can carry, one to-one relationship per
  * kind. An item fills exactly one of them, so asking for all of them is what
  * says *what* each item is — the version, an in-app purchase, a subscription.
+ *
+ * All but `appStoreVersionExperiment`, the deprecated v1 experiment: Apple
+ * answers 400 to an include naming both it and `appStoreVersionExperimentV2`
+ * ("they reference different versions of the same type"), and that one refusal
+ * took the whole submission list down with it. An item of that kind still
+ * comes back, with its id and state but no `kind`.
  */
 const ITEM_KINDS = [
   "appStoreVersion",
@@ -98,7 +104,6 @@ const ITEM_KINDS = [
   "subscriptionGroupVersion",
   "appEvent",
   "appCustomProductPageVersion",
-  "appStoreVersionExperiment",
   "appStoreVersionExperimentV2",
   "backgroundAssetVersion",
   "gameCenterAchievementVersion",
@@ -140,13 +145,13 @@ const summarizeItem = (item: Rec): ItemSummary => {
  */
 const summarizeSubmissions = (
   response: unknown,
-  itemDetails: Map<string, ItemSummary[]> = new Map(),
+  { details, failed }: ItemDetails = { details: new Map(), failed: [] },
 ): unknown => {
   const sideloaded = includedIndex(response, "reviewSubmissionItems");
   return {
     data: resourcesOf(response).map((res) => {
       const items =
-        itemDetails.get(String(res.id)) ??
+        details.get(String(res.id)) ??
         relatedIds(res, "items").map((id) => summarizeItem(sideloaded.get(id) ?? { id }));
       return {
         id: res.id,
@@ -159,32 +164,52 @@ const summarizeSubmissions = (
         ...(items.length > 0 ? { items } : {}),
       };
     }),
+    ...(failed.length > 0
+      ? {
+          note:
+            `Could not read what each item is for ${failed.join(", ")}; those rows list their ` +
+            `items with id and state only.`,
+        }
+      : {}),
   };
 };
+
+type ItemDetails = { details: Map<string, ItemSummary[]>; failed: string[] };
 
 /**
  * The items of each returned submission, with what each one is. Only the
  * UNRESOLVED_ISSUES rows get this second request: those are the ones where
  * "which item did Apple reject?" is the question, and `items.appStoreVersion`
  * cannot be sideloaded from the list endpoint itself.
+ *
+ * Extra detail, never a precondition: a submission whose items cannot be read
+ * falls back to the sideloaded id+state and is named in `failed`, rather than
+ * failing a list that had already succeeded.
  */
 const returnedItemDetails = async (
   client: AppStoreConnectClient,
   response: unknown,
-): Promise<Map<string, ItemSummary[]>> => {
+): Promise<ItemDetails> => {
   const returned = resourcesOf(response).filter(
     (res) => attributesOf(res).state === RETURNED_STATE,
   );
+  const failed: string[] = [];
   const entries = await Promise.all(
     returned.map(async (res) => {
-      const items = await client.get(`/v1/reviewSubmissions/${String(res.id)}/items`, {
-        include: ITEM_KINDS.join(","),
-        limit: 50,
-      });
-      return [String(res.id), resourcesOf(items).map(summarizeItem)] as const;
+      const id = String(res.id);
+      try {
+        const items = await client.get(`/v1/reviewSubmissions/${id}/items`, {
+          include: ITEM_KINDS.join(","),
+          limit: 50,
+        });
+        return [[id, resourcesOf(items).map(summarizeItem)] as const];
+      } catch {
+        failed.push(id);
+        return [];
+      }
     }),
   );
-  return new Map(entries);
+  return { details: new Map(entries.flat()), failed };
 };
 
 /**

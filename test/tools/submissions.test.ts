@@ -777,6 +777,75 @@ describe("review submission items", () => {
       { id: "i2", state: "REJECTED", kind: "inAppPurchaseVersion", targetId: "iap-v1" },
     ]);
   });
+
+  /** Apple's answer to an include naming both experiment kinds, verbatim from the live API. */
+  const bothExperiments = (): Response =>
+    new Response(
+      JSON.stringify({
+        errors: [
+          {
+            status: "400",
+            code: "PARAMETER_ERROR.INVALID",
+            detail:
+              "You cannot include appStoreVersionExperiment and appStoreVersionExperimentV2 at " +
+              "the same time because they reference different versions of the same type.",
+          },
+        ],
+      }),
+      { status: 400, headers: { "content-type": "application/json" } },
+    );
+
+  const returnedList = (): Response =>
+    jsonResponse({
+      data: [submission("sub-1", "UNRESOLVED_ISSUES", ["i1"])],
+      included: [item("i1", "REJECTED")],
+    });
+
+  /** The bug this guards: asking for every item kind at once made Apple 400 the whole list. */
+  it("never asks Apple for both experiment kinds at once", async () => {
+    const fetchImpl = vi.fn(async (url: string) => {
+      if (!String(url).includes("/items")) return returnedList();
+      const include = new URL(url).searchParams.get("include")?.split(",") ?? [];
+      return include.includes("appStoreVersionExperiment") &&
+        include.includes("appStoreVersionExperimentV2")
+        ? bothExperiments()
+        : jsonResponse({
+            data: [
+              item("i1", "REJECTED", {
+                appStoreVersion: { data: { type: "appStoreVersions", id: "ver-1" } },
+              }),
+            ],
+          });
+    });
+    const client = await connect(baseConfig, fetchImpl as unknown as typeof fetch);
+
+    const result = await client.callTool({
+      name: "app_store_connect_list_review_submissions",
+      arguments: { appId: "1" },
+    });
+
+    expect(result.isError).toBeFalsy();
+    expect((payloadOf(result) as { data: { items: unknown[] }[] }).data[0]?.items).toEqual([
+      { id: "i1", state: "REJECTED", kind: "appStoreVersion", targetId: "ver-1" },
+    ]);
+  });
+
+  it("still lists the submissions when their items cannot be read", async () => {
+    const fetchImpl = vi.fn(async (url: string) =>
+      String(url).includes("/items") ? bothExperiments() : returnedList(),
+    );
+    const client = await connect(baseConfig, fetchImpl as unknown as typeof fetch);
+
+    const result = await client.callTool({
+      name: "app_store_connect_list_review_submissions",
+      arguments: { appId: "1" },
+    });
+
+    expect(result.isError).toBeFalsy();
+    const body = payloadOf(result) as { data: { items: unknown[] }[]; note?: string };
+    expect(body.data[0]?.items).toEqual([{ id: "i1", state: "REJECTED" }]);
+    expect(body.note).toContain("sub-1");
+  });
 });
 
 describe("submission prerequisites", () => {
