@@ -79,15 +79,19 @@ const displayTypeArg = z
  * a wall of long pre-signed URLs back into the model's context. They are spent
  * by the time anyone reads a screenshot, so drop them.
  */
+const withoutUploadOperations = (row: unknown): unknown => {
+  if (!isRecord(row)) return row;
+  const { uploadOperations: _dropped, ...rest } = row;
+  return rest;
+};
+
 const stripUploadOperations = (summarized: unknown): unknown => {
   if (!isRecord(summarized) || !("data" in summarized)) return summarized;
-  const strip = (row: unknown): unknown => {
-    if (!isRecord(row)) return row;
-    const { uploadOperations: _dropped, ...rest } = row;
-    return rest;
-  };
   const { data } = summarized;
-  return { ...summarized, data: Array.isArray(data) ? data.map(strip) : strip(data) };
+  return {
+    ...summarized,
+    data: Array.isArray(data) ? data.map(withoutUploadOperations) : withoutUploadOperations(data),
+  };
 };
 
 /** Find the existing set for a display type, so uploads don't need a lookup first. */

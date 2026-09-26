@@ -51,7 +51,7 @@ export const connect = async (
 };
 
 export const toolNames = async (client: Client): Promise<string[]> =>
-  (await client.listTools()).tools.map((t) => t.name).sort();
+  (await client.listTools()).tools.map((t) => t.name).toSorted();
 
 export const callArgs = (fetchImpl: ReturnType<typeof vi.fn>, index = 0): [string, RequestInit] =>
   fetchImpl.mock.calls[index] as unknown as [string, RequestInit];

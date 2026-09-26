@@ -217,6 +217,8 @@ export const csvCoverage = (
     rows: lines.length - 1,
   };
 };
+const stripTrailingNewlines = (part: string): string => part.replace(/\n+$/, "");
+
 /**
  * Join several segments into one report, dropping the header Apple repeats on
  * each. A leftover header becomes a phantom data row and inflates every count.
@@ -231,10 +233,9 @@ export const concatSegments = (parts: string[]): string => {
   if (rest.length === 0) return first;
 
   const header = first.split("\n")[0];
-  const strip = (part: string): string => part.replace(/\n+$/, "");
   const bodies = rest.map((part) => {
     const lines = part.split("\n");
-    return strip(lines[0] === header ? lines.slice(1).join("\n") : part);
+    return stripTrailingNewlines(lines[0] === header ? lines.slice(1).join("\n") : part);
   });
-  return `${[strip(first), ...bodies].filter((part) => part !== "").join("\n")}\n`;
+  return `${[stripTrailingNewlines(first), ...bodies].filter((part) => part !== "").join("\n")}\n`;
 };

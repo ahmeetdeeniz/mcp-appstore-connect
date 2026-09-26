@@ -25,6 +25,7 @@ type ProgressRequest = {
 export const progressNotifier =
   (req: ProgressRequest) =>
   async (progress: number, total: number, message: string): Promise<void> => {
+    // oxlint-disable-next-line no-underscore-dangle -- `_meta` is the MCP protocol's own name.
     const progressToken = req.mcpReq._meta?.progressToken;
     if (progressToken === undefined) return;
     await req.mcpReq.notify({
@@ -51,6 +52,12 @@ type AnalyticsWalk = {
    */
   requestIdOf: Map<string, string>;
 };
+/**
+ * Apple returns FRAMEWORK_USAGE for things like AirPlay discovery sessions on
+ * apps that never touch them, and it dominates the catalogue by count.
+ */
+const isNoise = (report: Rec): boolean => attributesOf(report).category === "FRAMEWORK_USAGE";
+
 /**
  * Walk requests -> reports -> instances for one app.
  *
@@ -104,9 +111,6 @@ export const walkAnalytics = async (
   });
   const allReports = reportPages.flatMap((page) => page.data);
 
-  // Apple returns FRAMEWORK_USAGE for things like AirPlay discovery sessions on
-  // apps that never touch them, and it dominates the catalogue by count.
-  const isNoise = (report: Rec): boolean => attributesOf(report).category === "FRAMEWORK_USAGE";
   const filtering = opts.category === undefined && !opts.includeFrameworkUsage;
   const excluded = filtering ? allReports.filter(isNoise).length : 0;
   const reports = filtering ? allReports.filter((report) => !isNoise(report)) : allReports;

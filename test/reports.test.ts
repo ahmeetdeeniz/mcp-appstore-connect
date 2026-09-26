@@ -133,15 +133,15 @@ describe("previewReport", () => {
  * behind it.
  */
 describe("previewReport deprecated aliases", () => {
-  const header = "Provider\tUnits";
-  const row = (n: number): string => `APPLE\t${n}`;
+  const aliasHeader = "Provider\tUnits";
+  const aliasRow = (n: number): string => `APPLE\t${n}`;
 
   it("keeps `truncated` agreeing with `inlineTruncated` in both directions", () => {
-    const short = previewReport(`${header}\n${row(1)}\n`, 500);
+    const short = previewReport(`${aliasHeader}\n${aliasRow(1)}\n`, 500);
     expect(short.truncated).toBe(false);
     expect(short.truncated).toBe(short.inlineTruncated);
 
-    const long = previewReport(`${header}\n${row(1)}\n${row(2)}\n`, 2);
+    const long = previewReport(`${aliasHeader}\n${aliasRow(1)}\n${aliasRow(2)}\n`, 2);
     expect(long.truncated).toBe(true);
     expect(long.truncated).toBe(long.inlineTruncated);
   });
@@ -153,7 +153,7 @@ describe("previewReport deprecated aliases", () => {
    * Silent, and in the one direction that costs money.
    */
   it("drops `rows` and `note`, which fail loudly, but never `truncated`", () => {
-    const result = previewReport(`${header}\n${row(1)}\n${row(2)}\n`, 2);
+    const result = previewReport(`${aliasHeader}\n${aliasRow(1)}\n${aliasRow(2)}\n`, 2);
 
     expect(result.rows).toBeUndefined();
     expect(result.note).toBeUndefined();

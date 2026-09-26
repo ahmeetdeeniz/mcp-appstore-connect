@@ -66,7 +66,7 @@ const mapSettled = async <T, R>(
 
 /** Newest first by version number, so index 0 is the shipping one. */
 const newestFirst = (versions: VersionWithBuild[]): VersionWithBuild[] =>
-  [...versions].sort((a, b) =>
+  versions.toSorted((a, b) =>
     compareVersions(String(b.versionString ?? "0"), String(a.versionString ?? "0")),
   );
 
@@ -90,7 +90,7 @@ const currentPerPlatform = (versions: VersionWithBuild[]): VersionWithBuild[] =>
     const platform = String(version.platform ?? "UNKNOWN");
     if (!byPlatform.has(platform)) byPlatform.set(platform, version);
   }
-  return [...byPlatform.values()].sort((a, b) =>
+  return [...byPlatform.values()].toSorted((a, b) =>
     String(a.platform ?? "").localeCompare(String(b.platform ?? "")),
   );
 };
