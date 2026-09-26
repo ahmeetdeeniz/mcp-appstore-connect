@@ -186,6 +186,8 @@ export const registerBundleIdTools = (
         name: z.string().min(1).describe("A human-readable name for the App ID."),
         platform: z.enum(BUNDLE_PLATFORMS).default("UNIVERSAL"),
         seedId: z.string().optional().describe("Team seed id (App ID prefix). Usually inferred."),
+        // The identifier is spent for good once registered, even if deleted.
+        confirm: confirmArg,
       }),
       annotations: { readOnlyHint: false, destructiveHint: false },
     },

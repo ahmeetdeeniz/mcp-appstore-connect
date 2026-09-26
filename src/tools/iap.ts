@@ -446,7 +446,8 @@ export const registerIapTools = (
           ),
         confirm: confirmArg,
       }),
-      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
+      // Replaces the territory list, so it can withdraw the IAP from a storefront.
+      annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false },
     },
     async ({ inAppPurchaseId, territories, availableInNewTerritories }) =>
       wrap(async () => {

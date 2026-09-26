@@ -218,6 +218,15 @@ describe("tool registration", () => {
     expect(byName.get("app_store_connect_create_version")?.annotations?.destructiveHint).toBe(
       false,
     );
+    // Both submit tools hand work to Apple for good, and say so the same way.
+    for (const name of [
+      "app_store_connect_submit_version_for_review",
+      "app_store_connect_submit_in_app_purchase_for_review",
+      "app_store_connect_set_iap_availability",
+      "app_store_connect_set_app_price",
+    ]) {
+      expect(byName.get(name)?.annotations?.destructiveHint, name).toBe(true);
+    }
   });
 
   /**
@@ -438,6 +447,35 @@ describe("destructive tools", () => {
       "https://api.appstoreconnect.apple.com/v1/betaGroups/g1/relationships/betaTesters",
     );
     expect(init.method).toBe("DELETE");
+  });
+});
+
+describe("one-way creations", () => {
+  it.each([
+    [
+      "app_store_connect_create_bundle_id",
+      { identifier: "com.acme.app", name: "Acme" },
+      "/v1/bundleIds",
+    ],
+    [
+      "app_store_connect_register_device",
+      { name: "QA iPhone", udid: "00008110-000A1B2C3D4E5F60" },
+      "/v1/devices",
+    ],
+  ])("%s refuses without confirm, then posts with it", async (name, args, path) => {
+    const fetchImpl = vi.fn(async () => jsonResponse({ data: { id: "new", type: "x" } }));
+    const client = await connect(
+      { ...baseConfig, allowWrites: true },
+      fetchImpl as unknown as typeof fetch,
+    );
+
+    const refused = await client.callTool({ name, arguments: args });
+    expect(refused.isError).toBe(true);
+    expect(fetchImpl).not.toHaveBeenCalled();
+
+    const done = await client.callTool({ name, arguments: { ...args, confirm: true } });
+    expect(done.isError).toBeFalsy();
+    expect(postCall(fetchImpl, path)).toBeDefined();
   });
 });
 

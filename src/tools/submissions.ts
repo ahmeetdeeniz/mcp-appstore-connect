@@ -518,7 +518,8 @@ export const registerSubmissionTools = (
         "of a draft does stage the version on it, which moves the version to READY_FOR_REVIEW; " +
         "calling again without dryRun finishes that same submission.",
       inputSchema: z.object({ versionId: versionIdArg, dryRun: dryRunArg, confirm: confirmArg }),
-      annotations: { readOnlyHint: false, destructiveHint: false },
+      // Hands the version to Apple irrecoverably, like submit_in_app_purchase_for_review.
+      annotations: { readOnlyHint: false, destructiveHint: true },
     },
     async ({ versionId, dryRun = false }) =>
       wrap(async () => {
