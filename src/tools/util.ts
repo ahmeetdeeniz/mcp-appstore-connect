@@ -4,7 +4,8 @@ import { dirname, isAbsolute } from "node:path";
 import { z } from "zod";
 
 import type { AppStoreConnectClient, Query } from "#/client/asc";
-import { AppStoreConnectApiError, WritesDisabledError } from "#/client/errors";
+import { AppStoreConnectApiError, PreconditionError, WritesDisabledError } from "#/client/errors";
+import { compact } from "#/client/shape";
 import {
   isRecord,
   relatedId,
@@ -12,6 +13,10 @@ import {
   summarizeResource,
   summarizeResponse,
 } from "#/client/shape";
+
+// Moved below the tools layer so src/reports can use them; re-exported so
+// every tool keeps importing from here.
+export { compact, PreconditionError };
 
 export type ToolResult = {
   content: { type: "text"; text: string }[];
@@ -197,20 +202,6 @@ export const fieldsArg = z
 
 export const PLATFORMS = ["IOS", "MAC_OS", "TV_OS", "VISION_OS"] as const;
 
-/**
- * A local check that failed before we sent anything to Apple. Carries the state
- * it read, so the caller sees why rather than just that something was wrong.
- */
-export class PreconditionError extends Error {
-  override readonly name = "PreconditionError";
-  constructor(
-    message: string,
-    readonly details: Record<string, unknown>,
-  ) {
-    super(message);
-  }
-}
-
 /** The App Store Connect resource id of an app (from list_apps), not its bundle id. */
 export const appIdArg = z
   .string()
@@ -302,10 +293,6 @@ export const dryRunArg = z
   .boolean()
   .default(false)
   .describe("Stop before the irreversible step and report what would happen. Defaults to false.");
-
-/** Drop undefined values so we never send `{"filter[x]": undefined}` upstream. */
-export const compact = <T extends Record<string, unknown>>(obj: T): Partial<T> =>
-  Object.fromEntries(Object.entries(obj).filter(([, v]) => v !== undefined)) as Partial<T>;
 
 /**
  * GET a to-one sub-resource that may never have been created, e.g. an app's

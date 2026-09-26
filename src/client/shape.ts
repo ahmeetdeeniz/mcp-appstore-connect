@@ -135,3 +135,7 @@ export const summarizeResponse = (response: unknown): unknown => {
     ...(next !== undefined ? { links: { next } } : {}),
   };
 };
+
+/** Drop undefined values so we never send `{"filter[x]": undefined}` upstream. */
+export const compact = <T extends Record<string, unknown>>(obj: T): Partial<T> =>
+  Object.fromEntries(Object.entries(obj).filter(([, v]) => v !== undefined)) as Partial<T>;

@@ -3,6 +3,7 @@ import type { McpServer } from "@modelcontextprotocol/server";
 import type { AppStoreConnectClient } from "#/client/asc";
 import type { Contact } from "#/config";
 import { isConfigured, type Config } from "#/config";
+import { registerAnalyticsTools } from "#/tools/analytics";
 import { registerAppInfoTools } from "#/tools/appinfos";
 import { registerAppTools } from "#/tools/apps";
 import { registerBuildTools } from "#/tools/builds";
@@ -83,6 +84,7 @@ export const registerTools = (
   registerBuildTools(server, client, allowWrites);
   registerTestflightTools(server, client, allowWrites);
   registerReportTools(server, client, ctx);
+  registerAnalyticsTools(server, client, ctx);
   registerCustomerReviewTools(server, client, allowWrites);
   registerUserTools(server, client, allowWrites);
   registerBundleIdTools(server, client, allowWrites);

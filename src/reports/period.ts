@@ -20,7 +20,9 @@
  * through a tool call and wrong by a whole day at the edges.
  */
 
-export type Frequency = "DAILY" | "WEEKLY" | "MONTHLY" | "YEARLY";
+export const FREQUENCIES = ["DAILY", "WEEKLY", "MONTHLY", "YEARLY"] as const;
+
+export type Frequency = (typeof FREQUENCIES)[number];
 
 export type EmptyReason =
   /** The period has not started. A caller mistake, not data. */

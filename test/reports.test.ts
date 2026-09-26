@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { classifyByCalendar, classifyProbe, periodSpan, stepDown } from "#/reports/period";
-import { previewReport } from "#/tools/reports";
+import { previewReport } from "#/reports/tsv";
 
 /**
  * `previewReport` decides two numbers a caller cannot check for themselves —
