@@ -190,7 +190,7 @@ What's New on 1.0). The audit distinguishes these: `MISSING` gates the release, 
 just telling you the field is empty.
 
 **"First" is per platform, and the changelog cannot see that.** One repo ships a Mac and
-an iOS build from one target and one `CHANGELOG.md`, so the first *iOS* version can be
+an iOS build from one target and one `CHANGELOG.md`, so the first _iOS_ version can be
 1.8.1 with fourteen entries above it. The audit reads the changelog, finds a previous
 release, and gates on a `MISSING WHAT'S NEW` that Apple will not accept if you write it.
 Pass `--first-release` for that tree. Nothing offline can tell the two cases apart — the
@@ -262,7 +262,7 @@ ships two platforms from one target and the screenshot configs were cloned from 
 other.
 
 So when a repo has more than one screenshot config, take each screen id and find the
-thing that *opens* it — the toolbar item, the menu entry, the context-menu button — and
+thing that _opens_ it — the toolbar item, the menu entry, the context-menu button — and
 check that it is not compiled out on that platform. Grep the entry point, not the sheet:
 the sheet is usually cross-platform and still present in the binary as dead code, so
 `strings` on the artifact proves nothing either way. Driving the built app in a simulator
@@ -393,7 +393,7 @@ xcrun altool --upload-app  -f build/export/App.pkg -t macos \
 
 **Those are the macOS incantations, and every one of them changes for iOS**: the
 destination is `generic/platform=iOS`, the artifact is a `.ipa` rather than a `.pkg`, and
-`altool` wants `-t ios`. A universal app ships *two* builds from one source tree, and they
+`altool` wants `-t ios`. A universal app ships _two_ builds from one source tree, and they
 are separate uploads, separate `processingState`s and separate versions on App Store
 Connect. Give them their own archive paths — one `-archivePath` used twice silently
 overwrites the first archive with the second.
