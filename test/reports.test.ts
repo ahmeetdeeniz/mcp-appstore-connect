@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { classifyByCalendar, classifyProbe, periodSpan, stepDown } from "#/reports/period";
-import { previewReport } from "#/reports/tsv";
+import { concatSegments, csvCoverage, previewReport } from "#/reports/tsv";
 
 /**
  * `previewReport` decides two numbers a caller cannot check for themselves —
@@ -311,5 +311,19 @@ describe("classifyProbe", () => {
 
     expect(verdict.reason).toBe("NO_ROWS_OBSERVED");
     expect(verdict.evidence).toMatchObject({ periodsChecked: 5, periodsInSpan: 31 });
+  });
+});
+
+describe("csvCoverage", () => {
+  it("orders MM/DD/YYYY dates chronologically, not by month", () => {
+    const csv = "Date,Units\n01/05/2026,1\n12/30/2025,2\n";
+    expect(csvCoverage(csv)).toEqual({ firstDate: "2025-12-30", lastDate: "2026-01-05", rows: 2 });
+  });
+});
+
+describe("concatSegments", () => {
+  it("drops a repeated header even when one segment ends lines in CRLF", () => {
+    const merged = concatSegments(["Date,Units\n2026-01-01,1\n", "Date,Units\r\n2026-01-02,2\n"]);
+    expect(merged).toBe("Date,Units\n2026-01-01,1\n2026-01-02,2\n");
   });
 });

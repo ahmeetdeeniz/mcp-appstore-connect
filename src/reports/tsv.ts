@@ -209,6 +209,9 @@ export const csvCoverage = (
     .slice(1)
     .map((line) => (line.split(delimiter)[index] ?? "").trim())
     .filter((date) => date !== "")
+    // To ISO first: a string sort is only chronological on zero-padded
+    // YYYY-MM-DD, and Apple's MM/DD/YYYY would otherwise sort by month.
+    .map(isoDate)
     .toSorted();
   if (dates.length === 0) return null;
   return {
@@ -217,6 +220,7 @@ export const csvCoverage = (
     rows: lines.length - 1,
   };
 };
+
 const stripTrailingNewlines = (part: string): string => part.replace(/\n+$/, "");
 
 /**
@@ -232,10 +236,12 @@ export const concatSegments = (parts: string[]): string => {
   // common case differ from the raw download for no reason.
   if (rest.length === 0) return first;
 
-  const header = first.split("\n")[0];
+  // Compared without trailing whitespace, so a stray \r on one segment's
+  // header cannot survive as a phantom data row.
+  const header = first.split("\n")[0]?.trimEnd();
   const bodies = rest.map((part) => {
     const lines = part.split("\n");
-    return stripTrailingNewlines(lines[0] === header ? lines.slice(1).join("\n") : part);
+    return stripTrailingNewlines(lines[0]?.trimEnd() === header ? lines.slice(1).join("\n") : part);
   });
   return `${[stripTrailingNewlines(first), ...bodies].filter((part) => part !== "").join("\n")}\n`;
 };
