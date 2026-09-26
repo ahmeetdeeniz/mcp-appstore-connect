@@ -5,6 +5,7 @@ import type { AppStoreConnectClient } from "#/client/asc";
 import {
   type Rec,
   attributesOf,
+  includedIndex,
   isRecord,
   relatedId,
   resourceOf,
@@ -86,20 +87,105 @@ const submissionIdArg = z
   .describe("The reviewSubmission id (from app_store_connect_list_review_submissions).");
 
 /**
+ * Everything a review submission item can carry, one to-one relationship per
+ * kind. An item fills exactly one of them, so asking for all of them is what
+ * says *what* each item is — the version, an in-app purchase, a subscription.
+ */
+const ITEM_KINDS = [
+  "appStoreVersion",
+  "inAppPurchaseVersion",
+  "subscriptionVersion",
+  "subscriptionGroupVersion",
+  "appEvent",
+  "appCustomProductPageVersion",
+  "appStoreVersionExperiment",
+  "appStoreVersionExperimentV2",
+  "backgroundAssetVersion",
+  "gameCenterAchievementVersion",
+  "gameCenterActivityVersion",
+  "gameCenterChallengeVersion",
+  "gameCenterLeaderboardSetVersion",
+  "gameCenterLeaderboardVersion",
+] as const;
+
+type ItemSummary = { id: unknown; state: unknown; kind?: string; targetId?: string };
+
+/** The ids on the far side of a to-many relationship. */
+const relatedIds = (res: Rec, name: string): string[] => {
+  const rels = isRecord(res.relationships) ? res.relationships : {};
+  const rel = isRecord(rels[name]) ? (rels[name] as Rec) : {};
+  return Array.isArray(rel.data)
+    ? rel.data.filter(isRecord).flatMap((d) => (typeof d.id === "string" ? [d.id] : []))
+    : [];
+};
+
+/** One item's state and, when its relationships were included, what it is. */
+const summarizeItem = (item: Rec): ItemSummary => {
+  const kind = ITEM_KINDS.find((name) => relatedId(item, name) !== undefined);
+  return {
+    id: item.id,
+    state: attributesOf(item).state,
+    ...(kind !== undefined ? { kind, targetId: relatedId(item, kind) } : {}),
+  };
+};
+
+/**
  * `summarizeResponse` drops relationships, which for a submission throws away the
  * one thing that identifies it — which version is being reviewed. Keep that id.
+ *
+ * The items come along too, because a submission's state alone cannot say what
+ * Apple rejected: UNRESOLVED_ISSUES is the same whether the version or the
+ * in-app purchase riding with it was turned down. `itemDetails` replaces the
+ * sideloaded id+state with the fuller rows fetched for returned submissions.
  */
-const summarizeSubmissions = (response: unknown): unknown => ({
-  data: resourcesOf(response).map((res) => ({
-    id: res.id,
-    type: res.type,
-    ...attributesOf(res),
-    // Also the app, so several apps' submissions can be read in one request and
-    // still be told apart.
-    appId: relatedId(res, "app"),
-    appStoreVersionForReview: relatedId(res, "appStoreVersionForReview"),
-  })),
-});
+const summarizeSubmissions = (
+  response: unknown,
+  itemDetails: Map<string, ItemSummary[]> = new Map(),
+): unknown => {
+  const sideloaded = includedIndex(response, "reviewSubmissionItems");
+  return {
+    data: resourcesOf(response).map((res) => {
+      const items =
+        itemDetails.get(String(res.id)) ??
+        relatedIds(res, "items").map((id) => summarizeItem(sideloaded.get(id) ?? { id }));
+      return {
+        id: res.id,
+        type: res.type,
+        ...attributesOf(res),
+        // Also the app, so several apps' submissions can be read in one request and
+        // still be told apart.
+        appId: relatedId(res, "app"),
+        appStoreVersionForReview: relatedId(res, "appStoreVersionForReview"),
+        ...(items.length > 0 ? { items } : {}),
+      };
+    }),
+  };
+};
+
+/**
+ * The items of each returned submission, with what each one is. Only the
+ * UNRESOLVED_ISSUES rows get this second request: those are the ones where
+ * "which item did Apple reject?" is the question, and `items.appStoreVersion`
+ * cannot be sideloaded from the list endpoint itself.
+ */
+const returnedItemDetails = async (
+  client: AppStoreConnectClient,
+  response: unknown,
+): Promise<Map<string, ItemSummary[]>> => {
+  const returned = resourcesOf(response).filter(
+    (res) => attributesOf(res).state === RETURNED_STATE,
+  );
+  const entries = await Promise.all(
+    returned.map(async (res) => {
+      const items = await client.get(`/v1/reviewSubmissions/${String(res.id)}/items`, {
+        include: ITEM_KINDS.join(","),
+        limit: 50,
+      });
+      return [String(res.id), resourcesOf(items).map(summarizeItem)] as const;
+    }),
+  );
+  return new Map(entries);
+};
 
 /**
  * Whether this version is already an item on the submission. Apple 409s on a
@@ -370,7 +456,11 @@ export const registerSubmissionTools = (
       description:
         "List an app's App Store review submissions and their state (READY_FOR_REVIEW is a draft " +
         "not yet sent to Apple; WAITING_FOR_REVIEW and IN_REVIEW are with Apple). Each row " +
-        "carries the id of the version under review.",
+        "carries the id of the version under review and its `items` with their state. On an " +
+        "UNRESOLVED_ISSUES row (rejected) each item also says what it is (`kind`: " +
+        "appStoreVersion, inAppPurchaseVersion, ...) and its `targetId`, so the item in state " +
+        "REJECTED is the one Apple turned down. Apple's rejection message itself is not in the " +
+        "API: read it in App Store Connect's App Review page.",
       inputSchema: z.object({
         appId: appIdsArg,
         platform: z.enum(PLATFORMS).optional().describe("Filter by platform."),
@@ -381,24 +471,24 @@ export const registerSubmissionTools = (
       annotations: { readOnlyHint: true },
     },
     async ({ appId, platform, state, limit, savePath }) =>
-      wrapSaved(savePath, async () =>
-        summarizeSubmissions(
-          await client.get(
-            // The top-level collection, not /v1/apps/{id}/reviewSubmissions:
-            // `filter[app]` is an array here, so several apps come back in one
-            // request, and `include=app` is what puts `data` on the relationship
-            // so the rows can be told apart.
-            "/v1/reviewSubmissions",
-            compact({
-              "filter[app]": appId,
-              "filter[platform]": platform,
-              "filter[state]": state,
-              include: "app,appStoreVersionForReview",
-              limit,
-            }),
-          ),
-        ),
-      ),
+      wrapSaved(savePath, async () => {
+        const response = await client.get(
+          // The top-level collection, not /v1/apps/{id}/reviewSubmissions:
+          // `filter[app]` is an array here, so several apps come back in one
+          // request, and `include=app` is what puts `data` on the relationship
+          // so the rows can be told apart.
+          "/v1/reviewSubmissions",
+          compact({
+            "filter[app]": appId,
+            "filter[platform]": platform,
+            "filter[state]": state,
+            include: "app,appStoreVersionForReview,items",
+            "limit[items]": 50,
+            limit,
+          }),
+        );
+        return summarizeSubmissions(response, await returnedItemDetails(client, response));
+      }),
   );
 
   if (!allowWrites) return;

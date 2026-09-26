@@ -257,7 +257,7 @@ A **free** app still needs a price: "free" is a price point, not the absence of 
 
 **Versions & metadata** — `list_versions`, `get_version` (resolves the attached build — which binary the version would actually ship, and when it was uploaded), `list_version_localizations`, `get_version_localization`, _`create_version`_\*, _`update_version`_\* (release type — auto on approval, manual, or scheduled), _`update_version_localization`_\* (description, keywords, what's-new, promo text)
 
-**Review submissions** — `list_review_submissions`, _`submit_version_for_review`_\*†, _`cancel_review_submission`_\*†, _`remove_version_from_submission`_\*† — hand a finished version to Apple for review, withdraw one already with Apple, or take a version back off an un-submitted draft so its build can be changed again
+**Review submissions** — `list_review_submissions`, _`submit_version_for_review`_\*†, _`cancel_review_submission`_\*†, _`remove_version_from_submission`_\*† — hand a finished version to Apple for review, withdraw one already with Apple, or take a version back off an un-submitted draft so its build can be changed again. Each submission lists its `items`; on a rejected (`UNRESOLVED_ISSUES`) one, each item also names what it is — the version, an in-app purchase, a subscription — so the `REJECTED` item is identifiable. Apple's rejection message itself is not in the API; read it in App Store Connect.
 
 **Release** — _`release_version`_\*† — release an approved version sitting in `PENDING_DEVELOPER_RELEASE` (the manual "Release This Version" button)
 

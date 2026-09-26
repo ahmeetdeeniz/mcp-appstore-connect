@@ -2193,6 +2193,83 @@ describe("customer review replies", () => {
   });
 });
 
+describe("review submission items", () => {
+  const submission = (id: string, state: string, itemIds: string[]): unknown => ({
+    id,
+    type: "reviewSubmissions",
+    attributes: { state, platform: "IOS" },
+    relationships: {
+      items: { data: itemIds.map((itemId) => ({ type: "reviewSubmissionItems", id: itemId })) },
+    },
+  });
+  const item = (id: string, state: string, relationships: unknown = {}): unknown => ({
+    id,
+    type: "reviewSubmissionItems",
+    attributes: { state },
+    relationships,
+  });
+
+  it("carries each submission's items and their state", async () => {
+    const fetchImpl = vi.fn(async () =>
+      jsonResponse({
+        data: [submission("sub-1", "WAITING_FOR_REVIEW", ["i1"])],
+        included: [item("i1", "READY_FOR_REVIEW")],
+      }),
+    );
+    const client = await connect(baseConfig, fetchImpl as unknown as typeof fetch);
+
+    const body = payloadOf(
+      await client.callTool({
+        name: "app_store_connect_list_review_submissions",
+        arguments: { appId: "1" },
+      }),
+    ) as { data: { items: unknown[] }[] };
+
+    const url = new URL(callArgs(fetchImpl)[0]);
+    expect(url.searchParams.get("include")?.split(",")).toContain("items");
+    // No second request: nothing came back rejected.
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(body.data[0]?.items).toEqual([{ id: "i1", state: "READY_FOR_REVIEW" }]);
+  });
+
+  /**
+   * UNRESOLVED_ISSUES reads the same whether Apple turned down the version or the
+   * in-app purchase riding with it; the item's kind is what tells them apart.
+   */
+  it("says what each item of a rejected submission is", async () => {
+    const fetchImpl = vi.fn(async (url: string) =>
+      String(url).includes("/v1/reviewSubmissions/sub-1/items")
+        ? jsonResponse({
+            data: [
+              item("i1", "APPROVED", {
+                appStoreVersion: { data: { type: "appStoreVersions", id: "ver-1" } },
+              }),
+              item("i2", "REJECTED", {
+                inAppPurchaseVersion: { data: { type: "inAppPurchaseVersions", id: "iap-v1" } },
+              }),
+            ],
+          })
+        : jsonResponse({
+            data: [submission("sub-1", "UNRESOLVED_ISSUES", ["i1", "i2"])],
+            included: [item("i1", "APPROVED"), item("i2", "REJECTED")],
+          }),
+    );
+    const client = await connect(baseConfig, fetchImpl as unknown as typeof fetch);
+
+    const body = payloadOf(
+      await client.callTool({
+        name: "app_store_connect_list_review_submissions",
+        arguments: { appId: "1" },
+      }),
+    ) as { data: { items: unknown[] }[] };
+
+    expect(body.data[0]?.items).toEqual([
+      { id: "i1", state: "APPROVED", kind: "appStoreVersion", targetId: "ver-1" },
+      { id: "i2", state: "REJECTED", kind: "inAppPurchaseVersion", targetId: "iap-v1" },
+    ]);
+  });
+});
+
 describe("reports require a vendor number", () => {
   it("fails clearly when neither config nor argument supplies one", async () => {
     const fetchImpl = vi.fn(async () => jsonResponse({ data: [] }));
