@@ -27,6 +27,11 @@ export type AscClientOptions = {
   timeoutMs?: number;
   /** Per-attempt timeout for asset uploads and report downloads. Defaults to 5 minutes. */
   transferTimeoutMs?: number;
+  /**
+   * Largest report this client will hold in memory, compressed or not. Defaults
+   * to 256 MiB, comfortably under the ~512 MiB a single string can reach.
+   */
+  maxDownloadBytes?: number;
 };
 
 const DEFAULT_BASE_URL = "https://api.appstoreconnect.apple.com";
@@ -88,6 +93,7 @@ export class AppStoreConnectClient {
   private readonly userAgent: string;
   private readonly timeoutMs: number;
   private readonly transferTimeoutMs: number;
+  private readonly maxDownloadBytes: number;
 
   constructor(opts: AscClientOptions) {
     this.baseUrl = (opts.baseUrl ?? DEFAULT_BASE_URL).replace(/\/+$/, "");
@@ -98,6 +104,7 @@ export class AppStoreConnectClient {
     this.userAgent = opts.userAgent ?? "mcp-appstore-connect-js";
     this.timeoutMs = opts.timeoutMs ?? 60_000;
     this.transferTimeoutMs = opts.transferTimeoutMs ?? 300_000;
+    this.maxDownloadBytes = opts.maxDownloadBytes ?? 256 * 1024 * 1024;
   }
 
   /** Issue a request, returning the raw `Response` after the retry loop. */
@@ -228,7 +235,7 @@ export class AppStoreConnectClient {
    */
   async downloadReport(path: string, query: Query): Promise<string> {
     const res = await this.fetchWithRetry("GET", path, { query }, "application/a-gzip");
-    const buf = Buffer.from(await res.arrayBuffer());
+    const buf = await this.readCapped(res, path);
 
     if (!res.ok) {
       const text = buf.toString("utf8");
@@ -237,7 +244,7 @@ export class AppStoreConnectClient {
         errors: this.parseErrors(text),
       });
     }
-    return gunzipSync(buf).toString("utf8");
+    return this.gunzipCapped(buf, path);
   }
 
   /**
@@ -282,7 +289,7 @@ export class AppStoreConnectClient {
         timeoutMs: this.transferTimeoutMs,
       },
     );
-    const buf = Buffer.from(await res.arrayBuffer());
+    const buf = await this.readCapped(res, parsed.pathname);
 
     if (!res.ok) {
       const text = buf.toString("utf8").slice(0, 500);
@@ -293,7 +300,41 @@ export class AppStoreConnectClient {
         { status: res.status, errors: text },
       );
     }
-    return isGzip(buf) ? gunzipSync(buf).toString("utf8") : buf.toString("utf8");
+    return isGzip(buf) ? this.gunzipCapped(buf, parsed.pathname) : buf.toString("utf8");
+  }
+
+  private tooLarge(what: string, bytes: number | undefined): Error {
+    const mib = (n: number): string => `${Math.round(n / 1024 / 1024)} MiB`;
+    return new Error(
+      `${what} is ${bytes === undefined ? "larger than" : `${mib(bytes)}, over`} the ` +
+        `${mib(this.maxDownloadBytes)} this server will hold in memory. Narrow the request — a ` +
+        `shorter period, a SUMMARY rather than DETAILED report, or a single region.`,
+    );
+  }
+
+  /** Refuse a body Apple announces as oversized before reading any of it. */
+  private async readCapped(res: Response, path: string): Promise<Buffer> {
+    const announced = Number(res.headers.get("Content-Length"));
+    if (Number.isFinite(announced) && announced > this.maxDownloadBytes) {
+      await res.body?.cancel();
+      throw this.tooLarge(`The download from ${path}`, announced);
+    }
+    return Buffer.from(await res.arrayBuffer());
+  }
+
+  /**
+   * A gzipped TSV of repetitive rows compresses 10-50x, so the compressed size
+   * says little about what decompression will allocate. Cap the output itself.
+   */
+  private gunzipCapped(buf: Buffer, path: string): string {
+    try {
+      return gunzipSync(buf, { maxOutputLength: this.maxDownloadBytes }).toString("utf8");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ERR_BUFFER_TOO_LARGE") {
+        throw this.tooLarge(`The decompressed report from ${path}`, undefined);
+      }
+      throw error;
+    }
   }
 
   private parseErrors(text: string): AppStoreConnectError[] | unknown {

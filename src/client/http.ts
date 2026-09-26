@@ -6,7 +6,21 @@ export type Query = Record<string, QueryValue>;
 export const sleep = (ms: number): Promise<void> =>
   new Promise((resolve) => setTimeout(resolve, ms));
 
-export const backoffMs = (attempt: number): number => Math.min(1000 * 2 ** attempt, 8000);
+/**
+ * Exponential backoff with "equal jitter": half the step fixed, half random, so
+ * concurrent tool calls hit by the same outage do not retry in lockstep.
+ */
+export const backoffMs = (attempt: number, random: () => number = Math.random): number => {
+  const step = Math.min(1000 * 2 ** attempt, 8000);
+  return step / 2 + random() * (step / 2);
+};
+
+/**
+ * The longest `Retry-After` worth sleeping through inside a tool call. Past
+ * this the caller is better served by the 429 itself, now, than by a call that
+ * hangs silently for the hour Apple asked for.
+ */
+export const MAX_RETRY_AFTER_MS = 60_000;
 
 export const retryAfterMs = (res: Response): number | undefined => {
   const header = res.headers.get("Retry-After");
@@ -100,7 +114,14 @@ export const withRetry = async (
     }
 
     if ((res.status === 429 || res.status >= 500) && attempt < policy.maxRetries) {
-      const delay = retryAfterMs(res) ?? backoffMs(attempt);
+      const asked = retryAfterMs(res);
+      if (asked !== undefined && asked > MAX_RETRY_AFTER_MS) {
+        policy.logger?.warn?.(
+          `${policy.tag} HTTP ${res.status} with Retry-After ${asked / 1000}s — not waiting`,
+        );
+        return res;
+      }
+      const delay = asked ?? backoffMs(attempt);
       policy.logger?.warn?.(`${policy.tag} HTTP ${res.status} — retrying in ${delay}ms`);
       await sleep(delay);
       attempt += 1;
