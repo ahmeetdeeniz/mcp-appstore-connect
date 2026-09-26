@@ -461,6 +461,34 @@ describe("in-app purchase availability", () => {
     expect(body.data.attributes.availableInNewTerritories).toBe(true);
   });
 
+  it("follows every page of the territory catalogue for 'everywhere'", async () => {
+    const fetchImpl = vi.fn(async (url: string, init?: RequestInit) => {
+      if (init?.method === "POST") {
+        return jsonResponse({ data: { id: "avail-1", type: "inAppPurchaseAvailabilities" } });
+      }
+      return url.includes("cursor=")
+        ? jsonResponse({ data: [{ id: "JPN", type: "territories" }] })
+        : jsonResponse({
+            data: [{ id: "USA", type: "territories" }],
+            links: { next: "https://api.appstoreconnect.apple.com/v1/territories?cursor=AQ" },
+          });
+    });
+
+    await callTool(
+      "app_store_connect_set_iap_availability",
+      { inAppPurchaseId: IAP_ID, confirm: true },
+      fetchImpl,
+    );
+
+    const body = JSON.parse(
+      String(postCall(fetchImpl, "/v1/inAppPurchaseAvailabilities")?.[1].body),
+    );
+    expect(body.data.relationships.availableTerritories.data).toEqual([
+      { type: "territories", id: "USA" },
+      { type: "territories", id: "JPN" },
+    ]);
+  });
+
   it("reads a never-set availability 404 as 'not set', not an error", async () => {
     // Apple 404s a to-one sub-resource that was never created, and names the
     // PARENT's id in the message — raw, that reads as a broken request.

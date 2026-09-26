@@ -6,6 +6,7 @@ import { z } from "zod";
 import type { AppStoreConnectClient, UploadOperation } from "#/client/asc";
 import {
   attributesOf,
+  type Rec,
   relatedId,
   resourceOf,
   resourcesOf,
@@ -455,7 +456,9 @@ export const registerIapTools = (
         // and there is no wildcard, so an omitted list means read the catalogue.
         const resolved =
           territories ??
-          resourcesOf(await client.get("/v1/territories", { limit: 200 })).flatMap((t) =>
+          // Every page: ~175 fit in one today, and a catalogue that outgrew it
+          // would otherwise make "everywhere" silently mean "most places".
+          (await client.getAll<Rec>("/v1/territories", { limit: 200 })).data.flatMap((t) =>
             typeof t.id === "string" ? [t.id] : [],
           );
 
