@@ -718,12 +718,27 @@ export const registerSubmissionTools = (
       annotations: { readOnlyHint: false, destructiveHint: true },
     },
     async ({ submissionId }) =>
-      wrap(async () =>
-        summarizeResponse(
+      wrap(async () => {
+        // Apple accepts a cancel on a returned submission, so the description
+        // alone is the only thing between an agent and the mistake RETURNED_STATE
+        // documents. Read the state first and refuse that one case.
+        const current = resourceOf(await client.get(`/v1/reviewSubmissions/${submissionId}`));
+        const state = attributesOf(current).state;
+        if (state === RETURNED_STATE) {
+          throw new PreconditionError(
+            `This submission is ${RETURNED_STATE}: Apple handed it back and it is already ` +
+              `yours to edit. Cancelling it would surrender its queue position and restart the ` +
+              `review of every other item on it. Resolve the rejected items, then resubmit it ` +
+              `with app_store_connect_submit_version_for_review.`,
+            { submissionId, state },
+          );
+        }
+
+        return summarizeResponse(
           await client.patch(`/v1/reviewSubmissions/${submissionId}`, {
             data: { type: "reviewSubmissions", id: submissionId, attributes: { canceled: true } },
           }),
-        ),
-      ),
+        );
+      }),
   );
 };

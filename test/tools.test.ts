@@ -1004,6 +1004,26 @@ describe("update_version", () => {
       releaseType: "MANUAL",
     });
   });
+
+  /** Omitted means Apple's AFTER_APPROVAL, which answers a bare 409 to a date. */
+  it("rejects a create with a date but no releaseType before any request", async () => {
+    const fetchImpl = routed();
+
+    const result = await callTool(
+      {
+        appId: APP_ID,
+        versionString: "1.9.0",
+        platform: "MAC_OS",
+        earliestReleaseDate: "2026-08-01T12:00:00-07:00",
+      },
+      fetchImpl,
+      "app_store_connect_create_version",
+    );
+
+    expect(result.isError).toBe(true);
+    expect(textOf(result)).toContain("SCHEDULED");
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
 });
 
 describe("in-app purchase pricing", () => {
@@ -1921,6 +1941,62 @@ describe("release_version", () => {
   });
 });
 
+describe("cancel_review_submission", () => {
+  const SUBMISSION_ID = "sub-1";
+
+  const routed = (state: string): ReturnType<typeof vi.fn> =>
+    vi.fn(async () =>
+      jsonResponse({
+        data: { id: SUBMISSION_ID, type: "reviewSubmissions", attributes: { state } },
+      }),
+    );
+
+  const callTool = async (
+    args: Record<string, unknown>,
+    fetchImpl: ReturnType<typeof vi.fn>,
+  ): ReturnType<Client["callTool"]> => {
+    const client = await connect(
+      { ...baseConfig, allowWrites: true },
+      fetchImpl as unknown as typeof fetch,
+    );
+    return client.callTool({ name: "app_store_connect_cancel_review_submission", arguments: args });
+  };
+
+  it("cancels a submission that is waiting for review", async () => {
+    const fetchImpl = routed("WAITING_FOR_REVIEW");
+
+    const result = await callTool({ submissionId: SUBMISSION_ID, confirm: true }, fetchImpl);
+
+    expect(result.isError).toBeFalsy();
+    const [url, init] = patchCall(fetchImpl) as [string, RequestInit];
+    expect(url).toBe(`https://api.appstoreconnect.apple.com/v1/reviewSubmissions/${SUBMISSION_ID}`);
+    expect(JSON.parse(String(init.body)).data.attributes).toEqual({ canceled: true });
+  });
+
+  /**
+   * Apple accepts this cancel, and it is the expensive mistake: the rejected
+   * submission is already editable, and resubmitting it keeps its queue position.
+   */
+  it("refuses a returned submission and points at resubmitting it", async () => {
+    const fetchImpl = routed("UNRESOLVED_ISSUES");
+
+    const result = await callTool({ submissionId: SUBMISSION_ID, confirm: true }, fetchImpl);
+
+    expect(result.isError).toBe(true);
+    expect(textOf(result)).toContain("app_store_connect_submit_version_for_review");
+    expect(patchCall(fetchImpl)).toBeUndefined();
+  });
+
+  it("refuses without an explicit confirm", async () => {
+    const fetchImpl = routed("WAITING_FOR_REVIEW");
+
+    const result = await callTool({ submissionId: SUBMISSION_ID }, fetchImpl);
+
+    expect(result.isError).toBe(true);
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+});
+
 describe("customer reviews", () => {
   const APP_ID = "1234567890";
 
@@ -2379,6 +2455,30 @@ describe("download_finance_report", () => {
     // The report itself is untouched, so downstream parsing is unaffected.
     expect(body.report).toBe(FINANCE_TSV);
     expect(body.dataRows).toBe(1);
+    // One currency is nothing to warn about.
+    expect(body.currencies).toBeUndefined();
+  });
+
+  it("names every currency when an all-regions report mixes them", async () => {
+    const tsv =
+      "Start Date\tEnd Date\tVendor Identifier\tQuantity\tExtended Partner Share\t" +
+      "Partner Share Currency\n" +
+      "03/29/2026\t05/02/2026\tD1EXPLORER\t42\t123.45\tUSD\n" +
+      "03/29/2026\t05/02/2026\tD1EXPLORER\t7\t1800\tJPY\n" +
+      "03/29/2026\t05/02/2026\tD1EXPLORER\t3\t9.99\tEUR\n" +
+      "Total_Rows\t3\n";
+    const fetchImpl = vi.fn(async () => gzipResponse(tsv));
+    const client = await connect(baseConfig, fetchImpl as unknown as typeof fetch);
+
+    const body = payloadOf(
+      await client.callTool({
+        name: "app_store_connect_download_finance_report",
+        arguments: { reportDate: "2026-07", regionCode: "ZZ", vendorNumber: VENDOR },
+      }),
+    );
+
+    expect(body.currencies).toEqual(["EUR", "JPY", "USD"]);
+    expect(String(body.currencyNote)).toContain("not a revenue figure");
   });
 
   /**
@@ -2754,6 +2854,17 @@ describe("download_sales_report per-app filter", () => {
       expect(await readFile(savePath, "utf8")).toBe(SALES_TSV);
       expect(body.saved).toMatchObject({ path: savePath, dataRows: 3, lines: 4 });
       expect((body.saved as Record<string, unknown>).dataRows).toBe(body.dataRows);
+    });
+
+    it("counts the same rows as the preview when the report ends in blank lines", async () => {
+      const savePath = join(dir, "sales.tsv");
+      const body = JSON.parse(textOf(await download({ savePath }, `${SALES_TSV}\n\n`))) as Record<
+        string,
+        unknown
+      >;
+
+      expect(body.dataRows).toBe(3);
+      expect(body.saved).toMatchObject({ dataRows: 3, lines: 4 });
     });
 
     /**
@@ -4273,6 +4384,31 @@ describe("list_live_versions", () => {
   // shared instance passes the first test and fails every later one.
   const threeApps = (): Response =>
     jsonResponse({ data: [app("1", "Alpha"), app("2", "Beta"), app("3", "Gamma")] });
+
+  it("says when the app list stopped at limit, rather than reading as the portfolio", async () => {
+    const fetchImpl = routed([
+      [
+        /\/v1\/apps\?/,
+        () =>
+          jsonResponse({
+            data: [app("1", "Alpha"), app("2", "Beta")],
+            meta: { paging: { total: 5, limit: 2 } },
+          }),
+      ],
+      [/\/appStoreVersions/, () => jsonResponse({ data: [] })],
+    ]);
+    const client = await connect(baseConfig, fetchImpl as unknown as typeof fetch);
+
+    const body = payloadOf(
+      await client.callTool({
+        name: "app_store_connect_list_live_versions",
+        arguments: { limit: 2 },
+      }),
+    );
+
+    expect(body.meta).toMatchObject({ apps: 2, incomplete: true, appsTotal: 5 });
+    expect(String(body.note)).toContain("Only 2 of 5 apps");
+  });
 
   it("makes one request for the apps and one per app, no more", async () => {
     const fetchImpl = routed([

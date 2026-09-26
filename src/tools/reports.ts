@@ -59,6 +59,17 @@ const SALES_REPORT_TYPES = [
 ] as const;
 
 /**
+ * Lines up to the last non-blank one: Apple ends a report with a newline, and
+ * sometimes more than one. The single rule every row count here goes through,
+ * so the preview, the saved file and a split cannot disagree.
+ */
+const contentLineCount = (lines: readonly string[]): number => {
+  let count = lines.length;
+  while (count > 0 && lines[count - 1] === "") count -= 1;
+  return count;
+};
+
+/**
  * Trim a downloaded TSV report so a huge one doesn't blow the context window.
  *
  * Apple terminates both the sales TSV and an analytics CSV segment with a
@@ -88,8 +99,7 @@ const SALES_REPORT_TYPES = [
  */
 export const previewReport = (tsv: string, maxLines: number): Record<string, unknown> => {
   const lines = tsv.split("\n");
-  let count = lines.length;
-  while (count > 0 && lines[count - 1] === "") count -= 1;
+  const count = contentLineCount(lines);
 
   // Data lines only — the header is unique by construction, and counting it
   // would make a single-row report look like it repeated itself.
@@ -181,9 +191,7 @@ const saveReport = async (
   text: string,
 ): Promise<SavedFile & { lines: number; dataRows: number }> => {
   const written = await saveToPath(path, text, "report");
-  const lines = text
-    .split("\n")
-    .filter((line, index, all) => line !== "" || index < all.length - 1).length;
+  const lines = contentLineCount(text.split("\n"));
   return {
     ...written,
     // `report`, not `json`: this file is the raw TSV/CSV Apple returned, and
@@ -232,8 +240,7 @@ const previewAndSave = async (
  */
 const splitReport = (tsv: string): { header: string; rows: string[] } | undefined => {
   const lines = tsv.split("\n");
-  let count = lines.length;
-  while (count > 0 && lines[count - 1] === "") count -= 1;
+  const count = contentLineCount(lines);
   if (count === 0) return undefined;
   return { header: lines[0] as string, rows: lines.slice(1, count) };
 };
@@ -286,6 +293,33 @@ const financeCoverage = (tsv: string): { startDate: string; endDate: string } | 
   const endDate = cellAt(row, end);
   if (startDate === "" || endDate === "") return undefined;
   return { startDate: isoDate(startDate), endDate: isoDate(endDate) };
+};
+
+/**
+ * The distinct currencies a finance report's proceeds are stated in.
+ *
+ * Each row's `Extended Partner Share` is in that row's own `Partner Share
+ * Currency`, and an all-regions (ZZ) report puts USD, EUR and JPY rows side by
+ * side. Summing that column across them yields a number that looks like revenue
+ * and means nothing. Same stance as `financeCoverage`: a shape this does not
+ * recognise returns nothing rather than a guess.
+ */
+const financeCurrencies = (tsv: string): string[] => {
+  const lines = tsv.split("\n");
+  const headerIndex = lines.findIndex((line) => line.includes("Currency"));
+  if (headerIndex === -1) return [];
+
+  const columns = columnIndexes(lines[headerIndex] as string);
+  const column = columns.get("Partner Share Currency") ?? columns.get("Currency");
+  if (column === undefined) return [];
+
+  const currencies = new Set<string>();
+  for (const line of lines.slice(headerIndex + 1)) {
+    const value = cellAt(line, column);
+    // Footer rows (Total_Rows, Total_Amount) and repeated headers are not codes.
+    if (/^[A-Z]{3}$/.test(value)) currencies.add(value);
+  }
+  return [...currencies].toSorted();
 };
 
 /** The sales TSV columns identifying an app, named as Apple spells them. */
@@ -1448,6 +1482,9 @@ export const registerReportTools = (
         "Download a financial report (money Apple actually paid, by region) as TSV for one " +
         "fiscal month. This is the authoritative source for proceeds — prefer it over the sales " +
         "report when the question is revenue. Requires a vendor number. " +
+        "Each row's amount is in that row's own currency, and regionCode ZZ mixes several: " +
+        "never sum amounts across currencies — the response lists them in `currencies` when " +
+        "there is more than one. " +
         "reportDate is a FISCAL period, not a calendar one: Apple's fiscal year opens in late " +
         "September and its months are 4-4-5 weeks, so 2026-07 means fiscal month 7 of FY2026 — " +
         "roughly late March to early May — not July. Asking for the wrong period is silent, " +
@@ -1518,6 +1555,7 @@ export const registerReportTools = (
         // question is answered from the data rather than from the caller's memory
         // of Apple's calendar.
         const coverage = financeCoverage(tsv);
+        const currencies = financeCurrencies(tsv);
         return {
           ...(coverage
             ? { coverage: { ...coverage, requestedFiscalPeriod: reportDate } }
@@ -1528,6 +1566,16 @@ export const registerReportTools = (
                   "it covers could not be confirmed from the data. Verify the dates before " +
                   "quoting figures — reportDate is fiscal, not calendar.",
               }),
+          ...(currencies.length > 1
+            ? {
+                currencies,
+                currencyNote:
+                  `Proceeds in this report are stated in ${currencies.length} currencies ` +
+                  `(${currencies.join(", ")}): each row's amount is in its own Partner Share ` +
+                  `Currency. Total per currency, or convert first — a sum across rows is not ` +
+                  `a revenue figure.`,
+              }
+            : {}),
           ...(await previewAndSave(tsv, maxLines, savePath)),
         };
       }),

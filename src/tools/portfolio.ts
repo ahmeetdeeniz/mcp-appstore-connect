@@ -3,9 +3,19 @@ import { z } from "zod";
 
 import type { AppStoreConnectClient } from "#/client/asc";
 import { AppStoreConnectApiError } from "#/client/errors";
-import { attributesOf, includedIndex, type Rec, resourcesOf } from "#/client/shape";
+import { attributesOf, includedIndex, isRecord, type Rec, resourcesOf } from "#/client/shape";
 import { compact, PLATFORMS, savePathArg, wrapSaved } from "#/tools/util";
 import { versionWithBuild, type VersionWithBuild } from "#/tools/versionshape";
+
+/** Apple's `meta.paging.total` for a collection read, when it sent one. */
+const pagingTotal = (response: unknown): number | undefined => {
+  const meta = isRecord(response) && isRecord(response.meta) ? response.meta : undefined;
+  const paging = isRecord(meta?.paging) ? meta.paging : undefined;
+  return typeof paging?.total === "number" ? paging.total : undefined;
+};
+
+const hasNextPage = (response: unknown): boolean =>
+  isRecord(response) && isRecord(response.links) && typeof response.links.next === "string";
 
 /** The one state that means customers can download it right now. */
 const LIVE_STATE = "READY_FOR_SALE";
@@ -214,6 +224,12 @@ export const registerPortfolioTools = (
           }),
         );
         const apps = resourcesOf(appsResponse);
+        // `limit` caps the app list at one page, and each app costs a request of
+        // its own, so this stays a single page — but a portfolio cut short there
+        // must say so, or the missing apps read as apps with nothing live.
+        const appsTotal = pagingTotal(appsResponse);
+        const moreApps =
+          appsTotal !== undefined ? appsTotal > apps.length : hasNextPage(appsResponse);
 
         // One request per app. Apple's include depth is exactly 1 — no path in
         // its spec offers a dotted include — so `/v1/apps?include=appStoreVersions.build`
@@ -281,6 +297,13 @@ export const registerPortfolioTools = (
         const noBuild = rows.filter((row) => row.live.some((v) => v.build === null)).length;
 
         const notes: string[] = [];
+        if (moreApps) {
+          notes.push(
+            `Only ${apps.length}${appsTotal !== undefined ? ` of ${appsTotal}` : ""} apps are ` +
+              `reported: the list stopped at \`limit\`. Do NOT read an app as having no live ` +
+              `version because it is not here — pass appIds or bundleIds to cover the rest.`,
+          );
+        }
         if (errors.length > 0) {
           // Named rather than merely counted: a summarizing model that sees 7
           // rows and no complaint reports 7 apps as the portfolio.
@@ -321,6 +344,9 @@ export const registerPortfolioTools = (
             requests: 1 + apps.length,
             failed: errors.length,
             noLiveVersion,
+            ...(moreApps
+              ? { incomplete: true, ...(appsTotal !== undefined ? { appsTotal } : {}) }
+              : {}),
           },
           ...(notes.length > 0 ? { note: notes.join(" ") } : {}),
         };

@@ -340,7 +340,9 @@ export const registerVersionTools = (
     },
     async ({ appId, versionString, platform, releaseType, earliestReleaseDate }) =>
       wrap(async () => {
-        assertReleaseFieldsAgree(releaseType, earliestReleaseDate);
+        // Unlike an update, an omitted releaseType here is not "unchanged" but
+        // Apple's AFTER_APPROVAL, which rejects a date just the same.
+        assertReleaseFieldsAgree(releaseType ?? "AFTER_APPROVAL", earliestReleaseDate);
 
         return summarizeResponse(
           await client.post("/v1/appStoreVersions", {
