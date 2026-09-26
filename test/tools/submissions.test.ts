@@ -55,6 +55,14 @@ describe("submit_version_for_review", () => {
     attributes: { platform: "MAC_OS", state },
   });
 
+  /** A rejected submission naming the version it holds, as Apple sends it. */
+  const returnedHolding = (versionId: string): unknown => ({
+    ...(submission("UNRESOLVED_ISSUES") as Record<string, unknown>),
+    relationships: {
+      appStoreVersionForReview: { data: { id: versionId, type: "appStoreVersions" } },
+    },
+  });
+
   type Routes = {
     /** Receives whether the request asked to include the app relationship. */
     version?: (withApp: boolean) => unknown;
@@ -210,7 +218,7 @@ describe("submit_version_for_review", () => {
    */
   it("dryRun never resubmits a rejected submission", async () => {
     const fetchImpl = routed({
-      returned: [submission("UNRESOLVED_ISSUES")],
+      returned: [returnedHolding(VERSION_ID)],
       items: [{ id: "item-1", type: "reviewSubmissionItems", attributes: { state: "REJECTED" } }],
     });
 
@@ -233,7 +241,7 @@ describe("submit_version_for_review", () => {
    */
   it("resubmits a rejected submission instead of creating a new one", async () => {
     const fetchImpl = routed({
-      returned: [submission("UNRESOLVED_ISSUES")],
+      returned: [returnedHolding(VERSION_ID)],
       items: [
         { id: "item-version", type: "reviewSubmissionItems", attributes: { state: "REJECTED" } },
         {
@@ -312,6 +320,33 @@ describe("submit_version_for_review", () => {
 
     expect(result.isError).toBeTruthy();
     expect(textOf(result)).toContain("READY_FOR_REVIEW");
+    expect(patchCall(fetchImpl)).toBeUndefined();
+  });
+
+  /**
+   * A rejected submission can hold only an in-app purchase. Resubmitting it on
+   * a request for this version used to succeed and report the version as sent,
+   * though it never left.
+   */
+  it("refuses to resubmit a rejected submission that does not hold the version", async () => {
+    const fetchImpl = routed({
+      returned: [submission("UNRESOLVED_ISSUES")],
+      items: [
+        {
+          id: "item-iap",
+          type: "reviewSubmissionItems",
+          attributes: { state: "REJECTED" },
+          relationships: {
+            inAppPurchaseVersion: { data: { id: "iap-1", type: "inAppPurchaseVersions" } },
+          },
+        },
+      ],
+    });
+
+    const result = await callTool({ versionId: VERSION_ID, confirm: true }, fetchImpl);
+
+    expect(result.isError).toBe(true);
+    expect(textOf(result)).toContain("does not hold version");
     expect(patchCall(fetchImpl)).toBeUndefined();
   });
 

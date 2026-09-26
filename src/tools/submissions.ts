@@ -335,13 +335,31 @@ const resubmitReturned = async (
   submissionId: string,
   versionId: string,
   dryRun: boolean,
+  /** False when the caller already has positive evidence the version is on it. */
+  verifyHoldsVersion = false,
 ): Promise<unknown> => {
-  const items = resourcesOf(
-    await client.get(`/v1/reviewSubmissions/${submissionId}/items`, {
-      include: "appStoreVersion",
-      limit: 50,
-    }),
-  );
+  const itemsResponse = await client.get(`/v1/reviewSubmissions/${submissionId}/items`, {
+    include: "appStoreVersion",
+    limit: 50,
+  });
+  const items = resourcesOf(itemsResponse);
+
+  // A returned submission can hold only an in-app purchase. Resubmitting it
+  // would then report this version as sent while it never left, so without
+  // other evidence refuse unless the version is provably one of the items.
+  if (verifyHoldsVersion && !containsVersion(itemsResponse, versionId)) {
+    throw new PreconditionError(
+      `The rejected review submission ${submissionId} does not hold version ${versionId} — ` +
+        `none of its ${items.length} item(s) is this version — so resubmitting it would not ` +
+        `send this version to Apple. Add the version to that submission in App Store Connect, ` +
+        `then resubmit.`,
+      {
+        submissionId,
+        versionId,
+        items: items.map((item) => ({ id: item.id, state: attributesOf(item).state })),
+      },
+    );
+  }
 
   // Only the rejected items are touched. The others are still READY_FOR_REVIEW
   // from the first submission, or already resolved, and go back untouched —
@@ -611,7 +629,9 @@ export const registerSubmissionTools = (
             );
           }
 
-          return resubmitReturned(client, submissionId, versionId, dryRun);
+          // No appStoreVersionForReview means nothing yet says this version is
+          // on it, so resubmitReturned has to find it among the items.
+          return resubmitReturned(client, submissionId, versionId, dryRun, under === undefined);
         }
 
         // One submission per app+platform: an in-flight one has to be cancelled
