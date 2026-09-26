@@ -6,6 +6,7 @@ import { AppStoreConnectApiError } from "#/client/errors";
 import { attributesOf, includedIndex, isRecord, type Rec, resourcesOf } from "#/client/shape";
 import { compact, PLATFORMS, savePathArg, wrapSaved } from "#/tools/util";
 import { versionWithBuild, type VersionWithBuild } from "#/tools/versionshape";
+import { compareVersions } from "#/versions";
 
 /** Apple's `meta.paging.total` for a collection read, when it sent one. */
 const pagingTotal = (response: unknown): number | undefined => {
@@ -50,25 +51,6 @@ const IN_FLIGHT_STATES = [
  * already retried with `Retry-After`.
  */
 const CONCURRENCY = 8;
-
-/**
- * Compare version strings numerically, segment by segment.
- *
- * A lexical sort puts "1.10.0" before "1.9.0". Only reachable when Apple returns
- * two versions in the same state for one platform, which should not happen — but
- * "should not happen" resolved arbitrarily is how a portfolio report acquires a
- * wrong number that nobody can reproduce.
- */
-const compareVersions = (a: string, b: string): number => {
-  const pa = a.split(".");
-  const pb = b.split(".");
-  for (let i = 0; i < Math.max(pa.length, pb.length); i += 1) {
-    const na = Number.parseInt(pa[i] ?? "0", 10) || 0;
-    const nb = Number.parseInt(pb[i] ?? "0", 10) || 0;
-    if (na !== nb) return na - nb;
-  }
-  return 0;
-};
 
 /** Run `fn` over every item, at most `CONCURRENCY` at a time, settling each. */
 const mapSettled = async <T, R>(
