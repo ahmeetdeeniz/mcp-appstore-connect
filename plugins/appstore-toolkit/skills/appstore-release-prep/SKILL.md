@@ -266,7 +266,10 @@ thing that _opens_ it — the toolbar item, the menu entry, the context-menu but
 check that it is not compiled out on that platform. Grep the entry point, not the sheet:
 the sheet is usually cross-platform and still present in the binary as dead code, so
 `strings` on the artifact proves nothing either way. Driving the built app in a simulator
-is the check that actually settles it.
+is the check that actually settles it: through Xcode's MCP, launch without the staging
+arguments and tap from the first screen to the entry point, reading each step's
+accessibility hierarchy rather than the thumbnail. The appshot skill's iOS reference
+(*Looking at one stage*) has the session setup.
 
 Also keep hardcoded prices out of copy where you can — a `$4.99` in the description is
 wrong in most storefronts.
