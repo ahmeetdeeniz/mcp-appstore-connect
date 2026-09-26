@@ -23,6 +23,10 @@ export type AscClientOptions = {
   fetch?: typeof fetch;
   logger?: Logger;
   userAgent?: string;
+  /** Per-attempt timeout for API calls. Defaults to 60s. */
+  timeoutMs?: number;
+  /** Per-attempt timeout for asset uploads and report downloads. Defaults to 5 minutes. */
+  transferTimeoutMs?: number;
 };
 
 const DEFAULT_BASE_URL = "https://api.appstoreconnect.apple.com";
@@ -44,7 +48,7 @@ const TAG = "[appstore-connect]";
 const DOWNLOAD_HOSTS = [
   /(^|\.)apple\.com$/,
   // e.g. asp-us-west-2.s3.amazonaws.com, and the s3-<region> spelling.
-  /^asp-[a-z0-9-]+\.s3[.-][a-z0-9.-]*amazonaws\.com$/,
+  /^asp-[a-z0-9-]+\.s3([.-][a-z0-9-]+)*\.amazonaws\.com$/,
 ];
 
 const isGzip = (buf: Buffer): boolean => buf.length > 2 && buf[0] === 0x1f && buf[1] === 0x8b;
@@ -82,6 +86,8 @@ export class AppStoreConnectClient {
   private readonly fetchImpl: typeof fetch;
   private readonly logger: Logger | undefined;
   private readonly userAgent: string;
+  private readonly timeoutMs: number;
+  private readonly transferTimeoutMs: number;
 
   constructor(opts: AscClientOptions) {
     this.baseUrl = (opts.baseUrl ?? DEFAULT_BASE_URL).replace(/\/+$/, "");
@@ -90,6 +96,8 @@ export class AppStoreConnectClient {
     this.fetchImpl = opts.fetch ?? fetch;
     this.logger = opts.logger;
     this.userAgent = opts.userAgent ?? "mcp-appstore-connect-js";
+    this.timeoutMs = opts.timeoutMs ?? 60_000;
+    this.transferTimeoutMs = opts.transferTimeoutMs ?? 300_000;
   }
 
   /** Issue a request, returning the raw `Response` after the retry loop. */
@@ -103,10 +111,11 @@ export class AppStoreConnectClient {
     const hasBody = opts.body !== undefined;
 
     return withRetry(
-      async () => {
+      async (signal) => {
         const token = await this.tokenProvider.getToken();
         return this.fetchImpl(url, {
           method,
+          signal,
           headers: {
             Accept: accept,
             Authorization: `Bearer ${token}`,
@@ -122,6 +131,8 @@ export class AppStoreConnectClient {
         tag: TAG,
         logger: this.logger,
         onUnauthorized: () => this.tokenProvider.invalidate(),
+        // A gzipped report is a transfer, not an API reply, and can take a while.
+        timeoutMs: accept === "application/json" ? this.timeoutMs : this.transferTimeoutMs,
       },
     );
   }
@@ -172,8 +183,15 @@ export class AppStoreConnectClient {
 
       const url = op.url;
       const res = await withRetry(
-        () => this.fetchImpl(url, { method: op.method ?? "PUT", headers, body: chunk }),
-        { maxRetries: this.maxRetries, label: `PUT asset ${part}`, tag: TAG, logger: this.logger },
+        (signal) =>
+          this.fetchImpl(url, { method: op.method ?? "PUT", headers, body: chunk, signal }),
+        {
+          maxRetries: this.maxRetries,
+          label: `PUT asset ${part}`,
+          tag: TAG,
+          logger: this.logger,
+          timeoutMs: this.transferTimeoutMs,
+        },
       );
 
       if (!res.ok) {
@@ -254,12 +272,14 @@ export class AppStoreConnectClient {
     }
 
     const res = await withRetry(
-      () => this.fetchImpl(url, { method: "GET", headers: { "User-Agent": this.userAgent } }),
+      (signal) =>
+        this.fetchImpl(url, { method: "GET", headers: { "User-Agent": this.userAgent }, signal }),
       {
         maxRetries: this.maxRetries,
         label: `GET ${parsed.origin}${parsed.pathname}`,
         tag: TAG,
         logger: this.logger,
+        timeoutMs: this.transferTimeoutMs,
       },
     );
     const buf = Buffer.from(await res.arrayBuffer());

@@ -324,6 +324,10 @@ describe("AppStoreConnectClient.downloadSignedFile", () => {
     await expect(
       clientWith(fetchImpl).downloadSignedFile("http://asp-us-west-2.s3.amazonaws.com/segments/a"),
     ).rejects.toThrow(/Refusing to download/);
+    // Anyone can register s3-evilamazonaws.com; only a real .amazonaws.com passes.
+    await expect(
+      clientWith(fetchImpl).downloadSignedFile("https://asp-us-west-2.s3-evilamazonaws.com/a"),
+    ).rejects.toThrow(/Refusing to download/);
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 
@@ -336,5 +340,43 @@ describe("AppStoreConnectClient.downloadSignedFile", () => {
     await expect(clientWith(fetchImpl).downloadSignedFile(SEGMENT_URL)).rejects.toThrow(
       /short-lived and expire/,
     );
+  });
+});
+
+describe("AppStoreConnectClient timeouts", () => {
+  /** A connection that never answers, until the request's signal gives up on it. */
+  const stalled = vi.fn(
+    (_url: string, init: RequestInit = {}) =>
+      new Promise<Response>((_resolve, reject) => {
+        init.signal?.addEventListener("abort", () => reject(init.signal?.reason));
+      }),
+  );
+
+  it("fails a stalled request with a clear error, and does not replay it", async () => {
+    stalled.mockClear();
+    const client = new AppStoreConnectClient({
+      tokenProvider: spyProvider(),
+      fetch: stalled as unknown as typeof fetch,
+      timeoutMs: 20,
+    });
+
+    await expect(client.post("/v1/appStoreVersions", { data: {} })).rejects.toThrow(
+      /timed out after 0.02s.*not retried/,
+    );
+    // A POST that may have landed must not be sent twice.
+    expect(stalled).toHaveBeenCalledTimes(1);
+  });
+
+  it("bounds signed downloads with the transfer timeout", async () => {
+    stalled.mockClear();
+    const client = new AppStoreConnectClient({
+      tokenProvider: spyProvider(),
+      fetch: stalled as unknown as typeof fetch,
+      transferTimeoutMs: 20,
+    });
+
+    await expect(
+      client.downloadSignedFile("https://asp-us-west-2.s3.amazonaws.com/segments/abc"),
+    ).rejects.toThrow(/timed out/);
   });
 });

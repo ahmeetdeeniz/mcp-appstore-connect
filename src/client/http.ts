@@ -55,18 +55,42 @@ export type RetryPolicy = {
    * is wrong or revoked and retrying it would only burn the budget.
    */
   onUnauthorized?: (() => void) | undefined;
+  /**
+   * Per-attempt budget, covering the body read too since the signal outlives
+   * `perform`. Without one a stalled connection holds a tool call open for as
+   * long as undici's idle timeout, once per retry.
+   */
+  timeoutMs: number;
 };
 
-/** Run `perform` until it yields a non-retryable response or the budget runs out. */
+const isTimeout = (error: unknown): boolean =>
+  error instanceof Error && error.name === "TimeoutError";
+
+/**
+ * Run `perform` until it yields a non-retryable response or the budget runs out.
+ *
+ * A timeout is thrown, not retried: the request may have landed, and replaying
+ * a POST that did would create the resource twice.
+ */
 export const withRetry = async (
-  perform: () => Promise<Response>,
+  perform: (signal: AbortSignal) => Promise<Response>,
   policy: RetryPolicy,
 ): Promise<Response> => {
   let attempt = 0;
 
   for (;;) {
     policy.logger?.debug?.(`${policy.tag} ${policy.label} (attempt ${attempt + 1})`);
-    const res = await perform();
+    let res: Response;
+    try {
+      res = await perform(AbortSignal.timeout(policy.timeoutMs));
+    } catch (error) {
+      if (!isTimeout(error)) throw error;
+      throw new Error(
+        `${policy.label} timed out after ${policy.timeoutMs / 1000}s with no response. It was ` +
+          `not retried, because it may have gone through: check its effect before re-running it.`,
+        { cause: error },
+      );
+    }
 
     if (res.status === 401 && policy.onUnauthorized && attempt < policy.maxRetries) {
       policy.logger?.warn?.(`${policy.tag} HTTP 401 — reminting token and retrying`);
