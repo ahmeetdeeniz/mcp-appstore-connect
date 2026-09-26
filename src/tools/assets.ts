@@ -131,7 +131,24 @@ export const pollAssetState = async (
   let tick = 0;
 
   for (;;) {
-    const attrs = attributesOf(await client.get(`${resourcePath}/${assetId}`));
+    let response: unknown;
+    try {
+      response = await client.get(`${resourcePath}/${assetId}`);
+    } catch (error) {
+      // Same reasoning as the deadline below: the bytes are committed, so a
+      // failed status read must not surface as a failed upload.
+      return {
+        id: assetId,
+        state: "UNKNOWN",
+        stillProcessing: true,
+        ...meta,
+        note:
+          `The upload itself succeeded, but reading its processing state failed ` +
+          `(${error instanceof Error ? error.message : String(error)}). Do not re-upload — ` +
+          `poll ${opts.pollToolName} for the final state.`,
+      };
+    }
+    const attrs = attributesOf(response);
     const assetState = isRecord(attrs.assetDeliveryState) ? attrs.assetDeliveryState : {};
     const state = typeof assetState.state === "string" ? assetState.state : undefined;
 

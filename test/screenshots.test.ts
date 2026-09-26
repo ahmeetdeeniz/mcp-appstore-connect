@@ -279,6 +279,29 @@ describe("app_store_connect_upload_screenshot", () => {
     expect(payload.note).toContain("app_store_connect_get_screenshot");
   });
 
+  it("treats a failed status read after commit as success, not an error", async () => {
+    const routed = router({
+      existingSets: [{ id: "set-67", screenshotDisplayType: "APP_IPHONE_67" }],
+    });
+    const fetchImpl = vi.fn(async (url: string, init: RequestInit = {}) =>
+      (init.method ?? "GET") === "GET" && url.includes("/v1/appScreenshots/")
+        ? jsonResponse({ errors: [{ status: "403", detail: "flaky" }] }, 403)
+        : (routed as unknown as typeof fetch)(url, init),
+    );
+    const client = await connect(fetchImpl as unknown as typeof fetch);
+
+    const result = await upload(client, { waitSeconds: 30 });
+
+    expect(result.isError).toBeFalsy();
+    const payload = JSON.parse(textOf(result));
+    expect(payload.stillProcessing).toBe(true);
+    expect(payload.state).toBe("UNKNOWN");
+    expect(payload.note).toContain("Do not re-upload");
+    expect(payload.note).toContain("app_store_connect_get_screenshot");
+    // A committed upload leaves its asset in place.
+    expect(calls(fetchImpl).some(([, init]) => init.method === "DELETE")).toBe(false);
+  });
+
   it("retries a 5xx on the upload URL without reserving a second screenshot", async () => {
     const fetchImpl = router({
       existingSets: [{ id: "set-67", screenshotDisplayType: "APP_IPHONE_67" }],
