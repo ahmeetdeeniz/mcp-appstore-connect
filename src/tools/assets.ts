@@ -1,4 +1,4 @@
-import { readFile } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
 import { basename, isAbsolute } from "node:path";
 
 import type { AppStoreConnectClient } from "#/client/asc";
@@ -42,6 +42,15 @@ export const idOf = (response: unknown): string | undefined => {
  * `what` names the asset in every error, so a failure says "review screenshot"
  * rather than always saying "screenshot" regardless of what was being uploaded.
  */
+const assertImageSize = (bytes: number, what: string): void => {
+  if (bytes > MAX_IMAGE_BYTES) {
+    throw new Error(
+      `The ${what} is ${bytes} bytes, over the ${MAX_IMAGE_BYTES}-byte limit. Export it at ` +
+        `the exact required dimensions rather than oversampling.`,
+    );
+  }
+};
+
 export const readImage = async (
   filePath: string | undefined,
   fileData: string | undefined,
@@ -57,6 +66,8 @@ export const readImage = async (
   const resolved = await (async (): Promise<{ bytes: Buffer; name: string }> => {
     if (fileData !== undefined) {
       if (!fileName) throw new Error("`fileName` is required when passing `fileData`.");
+      // Four base64 characters carry three bytes: refuse before decoding.
+      assertImageSize(Math.floor((fileData.length * 3) / 4), what);
       return { bytes: Buffer.from(fileData, "base64"), name: fileName };
     }
 
@@ -67,29 +78,36 @@ export const readImage = async (
           `directory is not necessarily yours.`,
       );
     }
-    try {
-      return { bytes: await readFile(path), name: fileName ?? basename(path) };
-    } catch (err) {
+    const unreadable = (err: unknown): Error => {
       const code = (err as NodeJS.ErrnoException).code;
-      throw new Error(
+      return new Error(
         `Could not read the ${what} at ${path} (${code ?? "unknown error"}). If this MCP ` +
           `server runs in Docker the path must exist INSIDE the container — mount the folder ` +
           `(docker run -v /host/screenshots:/screenshots …) and pass the container path, or ` +
           `send the image as base64 via \`fileData\` instead.`,
         { cause: err },
       );
+    };
+    // Sized before it is read, so a path pointed at the wrong, huge file fails
+    // at once instead of after loading it.
+    const size = await stat(path).then(
+      (info) => info.size,
+      (err: unknown) => {
+        throw unreadable(err);
+      },
+    );
+    assertImageSize(size, what);
+    try {
+      return { bytes: await readFile(path), name: fileName ?? basename(path) };
+    } catch (err) {
+      throw unreadable(err);
     }
   })();
 
   if (resolved.bytes.byteLength === 0) {
     throw new Error(`The ${what} is empty (0 bytes): ${filePath ?? resolved.name}.`);
   }
-  if (resolved.bytes.byteLength > MAX_IMAGE_BYTES) {
-    throw new Error(
-      `The ${what} is ${resolved.bytes.byteLength} bytes, over the ${MAX_IMAGE_BYTES}-byte ` +
-        `limit. Export it at the exact required dimensions rather than oversampling.`,
-    );
-  }
+  assertImageSize(resolved.bytes.byteLength, what);
   return resolved;
 };
 

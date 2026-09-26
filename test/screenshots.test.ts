@@ -1,5 +1,7 @@
 import { createHash } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, truncateSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
@@ -364,6 +366,23 @@ describe("app_store_connect_upload_screenshot", () => {
     expect(text).toContain("/nope/missing.png");
     expect(text).toContain("Docker");
     expect(text).toContain("fileData");
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("refuses an oversized file with the size, not the unreadable-path message", async () => {
+    // Sparse, so an 11 MiB file costs nothing to create.
+    const path = join(mkdtempSync(join(tmpdir(), "asc-shot-")), "huge.png");
+    writeFileSync(path, "");
+    truncateSync(path, 11 * 1024 * 1024);
+    const fetchImpl = router();
+    const client = await connect(fetchImpl as unknown as typeof fetch);
+
+    const result = await upload(client, { filePath: path });
+
+    expect(result.isError).toBe(true);
+    expect(textOf(result)).toContain("over the");
+    // A size problem, not the Docker-path explanation for an unreadable file.
+    expect(textOf(result)).not.toContain("Could not read");
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 
