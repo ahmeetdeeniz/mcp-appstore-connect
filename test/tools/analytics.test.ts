@@ -570,6 +570,45 @@ describe("get_analytics_report", () => {
     expect(body.report).toBe(CSV);
   });
 
+  /**
+   * MONTHLY defaults to the snapshot because ONGOING months double-count. When
+   * only ONGOING has the month, an empty answer that does not say so reads as
+   * "no data" — but falling back silently would reintroduce the double count.
+   */
+  it("points at an ONGOING instance the defaulted snapshot preference skipped", async () => {
+    const name = "App Store Discovery and Engagement Standard";
+    const fetchImpl = (): ReturnType<typeof vi.fn> =>
+      walk({
+        requests: [
+          {
+            type: "analyticsReportRequests",
+            id: "req-s",
+            attributes: { accessType: "ONE_TIME_SNAPSHOT" },
+          },
+          { type: "analyticsReportRequests", id: "req-o", attributes: { accessType: "ONGOING" } },
+        ],
+        reports: {
+          "req-s": [report("rs", name, "APP_STORE_ENGAGEMENT", "req-s")],
+          "req-o": [report("ro", name, "APP_STORE_ENGAGEMENT", "req-o")],
+        },
+        instances: { ro: [instance("io", "MONTHLY")] },
+      });
+
+    const defaulted = payloadOf(await call(fetchImpl(), { granularity: "MONTHLY" }));
+    expect(defaulted).toMatchObject({ empty: true, reason: "NO_INSTANCES_FOR_GRANULARITY" });
+    expect(defaulted.otherAccessType).toMatchObject({ reports: [name] });
+    expect(String((defaulted.otherAccessType as Record<string, unknown>).note)).toContain(
+      'accessType "ONGOING"',
+    );
+
+    // Asked for explicitly, the snapshot is the answer and nothing more is said.
+    const explicit = payloadOf(
+      await call(fetchImpl(), { granularity: "MONTHLY", accessType: "ONE_TIME_SNAPSHOT" }),
+    );
+    expect(explicit.empty).toBe(true);
+    expect(explicit.otherAccessType).toBeUndefined();
+  });
+
   it("filters by category and granularity at Apple, not locally", async () => {
     const fetchImpl = walk({
       reports: [report("r1", "App Store Downloads", "COMMERCE")],

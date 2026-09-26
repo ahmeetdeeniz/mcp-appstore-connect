@@ -618,6 +618,7 @@ export const registerAnalyticsTools = (
             ? pool.filter((report) => String(attributesOf(report).name ?? "").startsWith(preferred))
             : pool;
         let candidates = byName.length > 0 ? byName : pool;
+        const beforeAccess = candidates;
 
         const wanted = candidates.filter((report) => {
           if (wantedAccess === undefined || wantedAccess === "ANY") return true;
@@ -627,12 +628,18 @@ export const registerAnalyticsTools = (
         if (wanted.length > 0) candidates = wanted;
 
         // Only reports that actually have an instance at this granularity.
-        const withInstances = candidates.filter((report) => {
-          const index = walk.probed.indexOf(report);
-          return (walk.instancePages[index]?.data.length ?? 0) > 0;
-        });
+        const hasInstance = (report: Rec): boolean =>
+          (walk.instancePages[walk.probed.indexOf(report)]?.data.length ?? 0) > 0;
+        const withInstances = candidates.filter(hasInstance);
 
         if (withInstances.length === 0) {
+          // The defaulted snapshot preference can hide data that does exist on
+          // the other access type. Falling back silently would bring back the
+          // double-counted ONGOING month the default avoids, so say so instead.
+          const elsewhere =
+            accessType === undefined && wantedAccess !== undefined
+              ? beforeAccess.filter((report) => !candidates.includes(report) && hasInstance(report))
+              : [];
           return {
             empty: true,
             reason: candidates.length === 0 ? "NO_MATCHING_REPORT" : "NO_INSTANCES_FOR_GRANULARITY",
@@ -650,6 +657,19 @@ export const registerAnalyticsTools = (
                 ? ` Only ${walk.probed.length} of ${walk.reports.length} reports were probed, so ` +
                   `this is a floor — raise maxReportsProbed.`
                 : ""),
+            ...(elsewhere.length > 0
+              ? {
+                  otherAccessType: {
+                    reports: elsewhere.map((r) => attributesOf(r).name),
+                    note:
+                      `A ${granularity} instance does exist on a request other than ` +
+                      `${wantedAccess}, which ${granularity} defaults to. It was not used: ONGOING ` +
+                      `monthly instances have been seen holding every row of their month twice. ` +
+                      `Pass accessType "ONGOING" to read it anyway, and check duplicateRows ` +
+                      `before quoting a total.`,
+                  },
+                }
+              : {}),
           };
         }
 
