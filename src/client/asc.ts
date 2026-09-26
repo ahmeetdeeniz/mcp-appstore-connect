@@ -56,6 +56,8 @@ const DOWNLOAD_HOSTS = [
   /^asp-[a-z0-9-]+\.s3([.-][a-z0-9-]+)*\.amazonaws\.com$/,
 ];
 
+const mib = (bytes: number): string => `${Math.round(bytes / 1024 / 1024)} MiB`;
+
 const isGzip = (buf: Buffer): boolean => buf.length > 2 && buf[0] === 0x1f && buf[1] === 0x8b;
 
 /** One leg of an asset upload, as handed back in an `uploadOperations` attribute. */
@@ -304,7 +306,6 @@ export class AppStoreConnectClient {
   }
 
   private tooLarge(what: string, bytes: number | undefined): Error {
-    const mib = (n: number): string => `${Math.round(n / 1024 / 1024)} MiB`;
     return new Error(
       `${what} is ${bytes === undefined ? "larger than" : `${mib(bytes)}, over`} the ` +
         `${mib(this.maxDownloadBytes)} this server will hold in memory. Narrow the request — a ` +
