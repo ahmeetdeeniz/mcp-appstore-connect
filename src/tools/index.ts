@@ -15,6 +15,7 @@ import { registerDeviceTools } from "#/tools/devices";
 import { registerIapTools } from "#/tools/iap";
 import { registerListingTools } from "#/tools/listing";
 import { registerPortfolioTools } from "#/tools/portfolio";
+import { registerPreviewTools } from "#/tools/previews";
 import { registerPricingTools } from "#/tools/pricing";
 import { registerReportTools } from "#/tools/reports";
 import { registerReviewDetailTools } from "#/tools/reviewdetails";
@@ -81,6 +82,7 @@ export const registerTools = (
   registerIapTools(server, client, allowWrites);
   registerListingTools(server, client, ctx);
   registerScreenshotTools(server, client, allowWrites);
+  registerPreviewTools(server, client, allowWrites);
   registerBuildTools(server, client, allowWrites);
   registerTestflightTools(server, client, allowWrites);
   registerReportTools(server, client, ctx);
