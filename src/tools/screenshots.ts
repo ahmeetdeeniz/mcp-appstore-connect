@@ -5,7 +5,14 @@ import { z } from "zod";
 
 import type { AppStoreConnectClient, UploadOperation } from "#/client/asc";
 import { summarizeResponse } from "#/client/shape";
-import { attributesOf, idOf, isRecord, pollAssetState, readImage } from "#/tools/assets";
+import {
+  attributesOf,
+  idOf,
+  isRecord,
+  pollAssetState,
+  readImage,
+  stripUploadOperations,
+} from "#/tools/assets";
 import { compact, confirmArg, limitArg, savePathArg, wrap, wrapSaved } from "#/tools/util";
 
 /**
@@ -73,26 +80,6 @@ const displayTypeArg = z
       'APP_IPHONE_67 (6.7" — 1290x2796) and APP_IPAD_PRO_3GEN_129 (12.9" — 2048x2732). ' +
       "APP_DESKTOP is macOS.",
   );
-
-/**
- * `uploadOperations` is a plain attribute, so the generic summarizer would echo
- * a wall of long pre-signed URLs back into the model's context. They are spent
- * by the time anyone reads a screenshot, so drop them.
- */
-const withoutUploadOperations = (row: unknown): unknown => {
-  if (!isRecord(row)) return row;
-  const { uploadOperations: _dropped, ...rest } = row;
-  return rest;
-};
-
-const stripUploadOperations = (summarized: unknown): unknown => {
-  if (!isRecord(summarized) || !("data" in summarized)) return summarized;
-  const { data } = summarized;
-  return {
-    ...summarized,
-    data: Array.isArray(data) ? data.map(withoutUploadOperations) : withoutUploadOperations(data),
-  };
-};
 
 /** Find the existing set for a display type, so uploads don't need a lookup first. */
 const findScreenshotSet = async (
