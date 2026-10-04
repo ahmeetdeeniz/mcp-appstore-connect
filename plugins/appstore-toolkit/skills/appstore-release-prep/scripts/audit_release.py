@@ -12,6 +12,8 @@ Answers the questions you cannot reliably eyeball:
   - Has the screenshot config drifted from the copy that documents it?
   - What does each cross-platform (family) image claim, so it can be checked
     against the description?
+  - What does each app preview or promo video claim, and was it rendered before
+    the captures it is cut from?
 
 Usage:
     python3 audit_release.py [--repo PATH] [--json]
@@ -991,6 +993,85 @@ def family_claims(repo, config_rel):
     return {"config": config_rel, "composites": composites}
 
 
+def video_claims(repo, config_rel):
+    """The words baked into each `videos[]` entry (appshot `compose video`), for a
+    person to check against the description, and whether the local render is older
+    than the captures it was cut from.
+
+    A video built `--from-stills` reuses the screenshot captures, so a UI change that
+    makes the screenshots stale makes it stale too, and nothing on the store says so:
+    previews are uploaded by hand, outside anything this audit can see. Its hook and
+    captions are short claims, like a family caption, and get the same treatment:
+    listed, never judged. Accent marks (`*word*`) are stripped, since they are styling.
+
+    Staleness is read from file times next to the config: the newest render report
+    under `videos/report/` against the newest capture under `source/` of each screen
+    the video shows. Both directories are local and usually gitignored, so a fresh
+    clone has neither, which is reported as "not rendered here", not as stale. A
+    video with `cue` beats is recorded from the running app rather than cut from
+    stills, so its captures are not compared.
+    """
+    try:
+        data = json.load(open(os.path.join(repo, config_rel), encoding="utf-8"))
+    except (json.JSONDecodeError, OSError) as e:
+        return {"config": config_rel, "error": f"unreadable: {e}"}
+    videos = data.get("videos") or []
+    if not videos:
+        return None
+    base = os.path.dirname(os.path.join(repo, config_rel))
+    plain = lambda t: (t or "").replace("*", "").strip()
+
+    def newest(paths):
+        times = [os.path.getmtime(p) for p in paths if os.path.exists(p)]
+        return max(times) if times else None
+
+    out = []
+    for v in videos:
+        beats = v.get("beats") or []
+        recorded = any(b.get("cue") for b in beats)
+        screens = []
+        for name in [v.get("stage")] + [b.get("screen") for b in beats]:
+            if name and name not in screens:
+                screens.append(name)
+        card = v.get("card") or {}
+        report_dir = os.path.join(base, "videos", "report")
+        reports = []
+        if os.path.isdir(report_dir):
+            reports = [os.path.join(report_dir, f) for f in os.listdir(report_dir)
+                       if f.startswith(f"{v.get('id')}~") and f.endswith(".report.json")]
+        rendered = newest(reports)
+        stale = []
+        if rendered is not None and not recorded:
+            src = os.path.join(base, "source")
+            for name in screens:
+                shots = []
+                if os.path.isdir(src):
+                    shots = [os.path.join(src, f) for f in os.listdir(src)
+                             if f.startswith(f"{name}~") and f.endswith(".png")]
+                captured = newest(shots)
+                if captured is not None and captured > rendered:
+                    stale.append(name)
+        outputs = v.get("outputs") or {}
+        out.append({
+            "id": v.get("id"),
+            # `preview` and `website` are switches; `promo` is a list of [w, h] sizes.
+            "preview": outputs.get("preview") is True,
+            "promo": [f"{p[0]}x{p[1]}" for p in outputs.get("promo") or []
+                      if isinstance(p, list) and len(p) == 2],
+            "website": outputs.get("website") is True,
+            "duration": v.get("duration"),
+            "motion": v.get("motion"),
+            "recorded": recorded,
+            "screens": screens,
+            "hook": plain(v.get("hook")) or None,
+            "captions": [[b.get("at"), plain(b.get("caption"))] for b in beats if b.get("caption")],
+            "card": [plain(card.get(k)) for k in ("title", "subtitle", "cta") if card.get(k)],
+            "rendered": rendered is not None,
+            "stale_screens": stale,
+        })
+    return {"config": config_rel, "videos": out}
+
+
 # --------------------------------------------------------------------------
 
 def version_key(v):
@@ -1105,6 +1186,7 @@ def audit(repo, fields_file=None, live_fields=None, locale=None, metadata_root=N
         "em_dashes_changelog": scan_em_dashes(repo, [cl["path"]]),
         "screenshots": [r for r in (screenshot_sync(repo, c, doc_for(c)) for c in cfgs) if r],
         "family": [family_claims(repo, c) for c in find_family_configs(repo)],
+        "videos": [r for r in (video_claims(repo, c) for c in cfgs) if r],
     }
 
 
@@ -1290,6 +1372,36 @@ def report(a):
                 L.append(f"      {tag}{title or ''}")
                 if subtitle:
                     L.append(f"      {' ' * len(tag)}{subtitle}")
+
+    for vc in a.get("videos") or []:
+        L.append("")
+        L.append(f"VIDEOS  ({vc['config']})")
+        if vc.get("error"):
+            L.append(f"  ! {vc['error']}")
+            continue
+        L.append("  Claims baked into each video. Check them against the description. An App")
+        L.append("  Store preview is uploaded by hand: this MCP cannot list or upload previews.")
+        for v in vc["videos"]:
+            kinds = ", ".join(
+                (["App Store preview"] if v["preview"] else [])
+                + ([f"promo {' '.join(v['promo'])}"] if v["promo"] else [])
+                + (["website"] if v["website"] else [])) or "no outputs"
+            how = "recorded" if v["recorded"] else "from stills"
+            motion = f", {v['motion']}" if v.get("motion") else ""
+            store = "  [uploaded by hand]" if v["preview"] else ""
+            L.append(f"  {v['id']} ({kinds}; {v['duration']}s{motion}, {how}){store}")
+            if v["hook"]:
+                L.append(f"      hook: {v['hook']}")
+            for at, text in v["captions"]:
+                L.append(f"      {at}s  {text}")
+            if v["card"]:
+                L.append(f"      card: {' / '.join(v['card'])}")
+            if not v["rendered"]:
+                L.append("      not rendered here (no videos/report next to the config)")
+            elif v["stale_screens"]:
+                again = " and upload the preview again" if v["preview"] else ""
+                L.append(f"      ! rendered before the latest capture of: {', '.join(v['stale_screens'])}."
+                         f" Re-render it{again}.")
     return "\n".join(L)
 
 

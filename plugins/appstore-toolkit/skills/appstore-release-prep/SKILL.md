@@ -298,8 +298,11 @@ config with a `videos[]` entry (appshot `compose video`) renders App Store previ
 screenshots come from, with a hook and captions on top. Both checks above carry over. A UI
 change that makes the screenshots stale makes the preview stale too, and nothing on the
 store will say so. And the hook and captions are short claims like a family caption, so
-read them against this release's description. The `appshot-video` skill covers
-re-rendering one and reviewing it from its contact sheet without watching it.
+read them against this release's description. The audit lists each video's hook,
+captions and card under VIDEOS, and flags a render older than the latest capture of a
+screen it shows; it reads file times next to the config, so a fresh clone with no render
+says "not rendered here" instead. The `appshot-video` skill covers re-rendering one and
+reviewing it from its contact sheet without watching it.
 
 Also keep hardcoded prices out of copy where you can — a `$4.99` in the description is
 wrong in most storefronts.
