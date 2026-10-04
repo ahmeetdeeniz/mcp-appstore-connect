@@ -462,7 +462,11 @@ Volume, recency, and whether a cluster lines up with a release.
 
 ## Recommendations
 
-Store-side actions only, each one naming the number it comes from.
+Store-side actions only, each one naming the number it comes from. An app preview counts
+as one when the measured weak step is the product page itself (page views not becoming
+downloads) and the listing has none. Check that by hand in App Store Connect, since this
+MCP cannot list previews; the `appshot-video` skill makes one from the app's own
+screenshots.
 
 ## Gaps
 
