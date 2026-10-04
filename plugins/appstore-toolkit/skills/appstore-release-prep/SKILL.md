@@ -23,14 +23,24 @@ python3 ${CLAUDE_SKILL_DIR}/scripts/audit_release.py --repo <repo>   # add --jso
 It reports: the shipping version and the last documented one, the release boundary
 commit and everything since it, commits that shipped in the _last_ release but were
 never announced, every store field measured against Apple's limit, em dashes in
-prose, and screenshot-config drift. It exits non-zero if a field is over or missing,
+prose, screenshot-config drift, and the captions of any cross-platform family images
+(listed for you to check, never judged). It exits non-zero if a field is over or missing,
 so it can gate a release.
 
 The source is auto-detected: a metadata tree wins, else `APPSTORE.md`, `STORES.md`
-and friends. The tree is found from its `.listing.json` wherever that sits, falling
-back to `fastlane/metadata/` or `Listing/`; pass `--metadata-root <path>` for a tree
-that was moved and has no sidecar, or when the repo holds more than one. Pass `--fields-file <path>`
+and friends. Trees are found from every `.listing.json`, plus `fastlane/metadata/` or
+`Listing/` at `--repo` and beside the Xcode project, and a root holding platform folders
+(`Listing/macos/` + `Listing/ios/`) is one tree per platform. **Every tree is audited
+and gates the exit code**, each labelled with its platform. `--repo` can be a monorepo
+root: the app directory is found from its `.xcodeproj`, its CHANGELOG is looked for there
+first, and commits that touch only a sibling app (`apps/website`) are left out of the news.
+Pass `--metadata-root <path>` for a tree that was moved and has no sidecar, or to audit
+one tree only. Pass `--fields-file <path>`
 to force a document, or `--locale` to audit a locale other than the primary one.
+
+Only a dated heading is a release. `## [1.0.0] - Unreleased` is the entry being written:
+the audit says so, and since nothing has shipped it lists the commits made since the
+CHANGELOG was last edited, which are the ones that entry cannot mention yet.
 **Check the source it reports** — the header says which file or directory the numbers
 came from.
 If it reports "file does not exist" for a project that plainly has store copy, you
@@ -271,6 +281,26 @@ arguments and tap from the first screen to the entry point, reading each step's
 accessibility hierarchy rather than the thumbnail. The appshot skill's iOS reference
 (*Looking at one stage*) has the session setup.
 
+**A family image restates the listing's cross-device promises in six words, and those
+drift first.** A target shipping Mac and iOS may have a `Screenshots/family.config.json`
+(appshot `compose family`): one image with the app on a Mac and an iPhone, captioned with
+exactly the claims the description makes at length: what syncs, what Pro covers, which
+devices. The audit lists those captions under FAMILY IMAGES, per locale. It judges nothing,
+because a caption paraphrases rather than quotes. So read each against this release's
+description. The failure is a description edit that narrows a promise (sync moving behind
+Pro, a device dropped) while the image still makes the old one. Measured on Balise: the
+description said the library reaches the iPhone "with Pro", and a caption written without
+reading it said it simply syncs.
+
+**An app preview is cut from the same captures, and goes stale with them.** A screenshot
+config with a `videos[]` entry (appshot `compose video`) renders App Store previews
+(`outputs.preview`) and promos, usually `--from-stills`: from the very captures the
+screenshots come from, with a hook and captions on top. Both checks above carry over. A UI
+change that makes the screenshots stale makes the preview stale too, and nothing on the
+store will say so. And the hook and captions are short claims like a family caption, so
+read them against this release's description. The `appshot-video` skill covers
+re-rendering one and reviewing it from its contact sheet without watching it.
+
 Also keep hardcoded prices out of copy where you can — a `$4.99` in the description is
 wrong in most storefronts.
 
@@ -288,10 +318,19 @@ when to push. If you exported a metadata tree, remind them the tree and
 If the project generates its screenshots from a config, that config — not the doc —
 is the source of truth for the taglines baked into the images. Changing a tagline
 there means the PNGs are now stale; **say so**, since regenerating them is a separate
-step the user has to run. The `xcode-screenshot-pipeline` skill covers actually
+step the user has to run. The `appshot-screenshot-pipeline` skill covers actually
 regenerating them, and `app_store_connect_list_screenshot_sets` will tell you whether the
 version has a complete set — an incomplete one blocks submission, and nothing in this
-audit can see it.
+audit can see it. A family image marked `[Mac listing slot]` is not in the Mac set's
+`appstore/` directory: it is written to `Screenshots/family/[<locale>/]` and uploaded to
+the Mac set by hand, so a regenerated one is stale on the store until someone does that.
+Say so when its caption changed.
+
+An app preview is further out of reach: this MCP has no app-preview tools, so it can
+neither list a version's previews nor upload one. A re-rendered preview reaches the store
+only when someone uploads it in App Store Connect by hand (up to three per display size and
+locale, 15 to 30 s each). Previews are optional, so a missing one never blocks submission;
+say when one was re-rendered and still needs that upload.
 
 Do not bump versions, commit, tag, or submit **on your own initiative**. This skill
 writes documents; shipping is the user's call. When they do ask you to ship it, section 7
