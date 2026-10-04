@@ -279,7 +279,7 @@ the sheet is usually cross-platform and still present in the binary as dead code
 is the check that actually settles it: through Xcode's MCP, launch without the staging
 arguments and tap from the first screen to the entry point, reading each step's
 accessibility hierarchy rather than the thumbnail. The appshot skill's iOS reference
-(*Looking at one stage*) has the session setup.
+(_Looking at one stage_) has the session setup.
 
 **A family image restates the listing's cross-device promises in six words, and those
 drift first.** A target shipping Mac and iOS may have a `Screenshots/family.config.json`
@@ -329,11 +329,11 @@ audit can see it. A family image marked `[Mac listing slot]` is not in the Mac s
 the Mac set by hand, so a regenerated one is stale on the store until someone does that.
 Say so when its caption changed.
 
-An app preview is further out of reach: this MCP has no app-preview tools, so it can
-neither list a version's previews nor upload one. A re-rendered preview reaches the store
-only when someone uploads it in App Store Connect by hand (up to three per display size and
-locale, 15 to 30 s each). Previews are optional, so a missing one never blocks submission;
-say when one was re-rendered and still needs that upload.
+An app preview is a separate upload too. `app_store_connect_list_preview_sets` shows what a
+version's localization carries, and a re-rendered preview reaches the store only through
+`app_store_connect_upload_preview` (up to three per display size and locale, 15 to 30 s
+each). Previews are optional, so a missing one never blocks submission; say when one was
+re-rendered and still needs that upload, and upload it only when the user asks.
 
 Do not bump versions, commit, tag, or submit **on your own initiative**. This skill
 writes documents; shipping is the user's call. When they do ask you to ship it, section 7

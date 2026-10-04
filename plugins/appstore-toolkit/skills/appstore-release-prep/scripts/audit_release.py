@@ -1000,7 +1000,7 @@ def video_claims(repo, config_rel):
 
     A video built `--from-stills` reuses the screenshot captures, so a UI change that
     makes the screenshots stale makes it stale too, and nothing on the store says so:
-    previews are uploaded by hand, outside anything this audit can see. Its hook and
+    a preview is a separate upload, outside anything this audit can see. Its hook and
     captions are short claims, like a family caption, and get the same treatment:
     listed, never judged. Accent marks (`*word*`) are stripped, since they are styling.
 
@@ -1380,7 +1380,7 @@ def report(a):
             L.append(f"  ! {vc['error']}")
             continue
         L.append("  Claims baked into each video. Check them against the description. An App")
-        L.append("  Store preview is uploaded by hand: this MCP cannot list or upload previews.")
+        L.append("  Store preview is a separate upload: app_store_connect_upload_preview.")
         for v in vc["videos"]:
             kinds = ", ".join(
                 (["App Store preview"] if v["preview"] else [])
@@ -1388,7 +1388,7 @@ def report(a):
                 + (["website"] if v["website"] else [])) or "no outputs"
             how = "recorded" if v["recorded"] else "from stills"
             motion = f", {v['motion']}" if v.get("motion") else ""
-            store = "  [uploaded by hand]" if v["preview"] else ""
+            store = "  [separate upload]" if v["preview"] else ""
             L.append(f"  {v['id']} ({kinds}; {v['duration']}s{motion}, {how}){store}")
             if v["hook"]:
                 L.append(f"      hook: {v['hook']}")
