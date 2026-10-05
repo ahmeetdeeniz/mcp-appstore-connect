@@ -10,6 +10,10 @@ Answers the questions you cannot reliably eyeball:
   - Which fields have been edited since the last export, and therefore need pushing?
   - Where is the store copy still carrying em dashes?
   - Has the screenshot config drifted from the copy that documents it?
+  - What does each cross-platform (family) image claim, so it can be checked
+    against the description?
+  - What does each app preview or promo video claim, and was it rendered before
+    the captures it is cut from?
 
 Usage:
     python3 audit_release.py [--repo PATH] [--json]
@@ -46,6 +50,15 @@ FIELD_LIMITS = {
 # rather than "nobody wrote it" (see manifest.ts). WHAT'S NEW is required too,
 # but only once there is a previous release -- Apple rejects release notes on a
 # first version, so audit() drops it from this set for a 1.0.
+#
+# "First" is per PLATFORM, and the CHANGELOG cannot see that. One repo ships a
+# Mac and an iOS build from one target and one CHANGELOG, so the first iOS
+# version can be 1.8.1 with fourteen entries above it: `last_released` is set,
+# WHAT'S NEW is demanded, and the gate fails on copy Apple will not accept.
+# Nothing offline distinguishes that case -- the sidecar records the platform
+# but not whether the platform has shipped before -- so --first-release says so
+# explicitly, and the MISSING line points at it rather than leaving the reader
+# to argue with a red gate.
 REQUIRED_FIELDS = {"DESCRIPTION", "KEYWORDS", "SUBTITLE", "WHAT'S NEW"}
 
 # Header aliases -> canonical field name.
@@ -124,7 +137,7 @@ def read_versions(repo):
     """
     pbx = find_pbxproj(repo)
     if not pbx:
-        return {"pbxproj": None, "marketing_version": None, "build": None}
+        return {"pbxproj": None, "app_dir": "", "marketing_version": None, "build": None}
     text = open(pbx, encoding="utf-8", errors="replace").read()
     # The app target's version is usually the first one, but pbxproj ordering is
     # not guaranteed and test targets often pin 1.0. Taking [0] silently is how
@@ -133,8 +146,12 @@ def read_versions(repo):
     mv = re.findall(r"MARKETING_VERSION\s*=\s*([^;]+);", text)
     bn = re.findall(r"CURRENT_PROJECT_VERSION\s*=\s*([^;]+);", text)
     distinct = sorted(set(v.strip() for v in mv))
+    # The directory holding the .xcodeproj is the app's own root. In a monorepo it
+    # is apps/apple, and its CHANGELOG, listing and screenshots live beside it.
+    app_dir = os.path.relpath(os.path.dirname(os.path.dirname(pbx)), repo)
     return {
         "pbxproj": os.path.relpath(pbx, repo),
+        "app_dir": "" if app_dir == "." else app_dir.replace(os.sep, "/"),
         "marketing_version": mv[0].strip() if mv else None,
         "build": bn[0].strip() if bn else None,
         "all_marketing_versions": distinct,
@@ -147,6 +164,22 @@ def read_versions(repo):
 # --------------------------------------------------------------------------
 
 VERSION_HEADING = re.compile(r"^##\s*\[?([0-9]+\.[0-9]+(?:\.[0-9]+)?|Unreleased)\]?\s*(?:-\s*(\S+))?\s*$", re.I)
+# Only a date makes a heading a release. "## [1.0.0] - Unreleased" (or TBD, or
+# WIP) is the entry being written: reading "Unreleased" as its date reported a
+# never-shipped 1.0 as "already cut" and every commit before it as shipped.
+RELEASE_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
+def find_changelog(repo, app_rel=""):
+    """The CHANGELOG for this app: beside its Xcode project first, then at --repo.
+
+    A monorepo keeps the app in apps/apple with its own CHANGELOG.md, and pointing
+    the audit at the monorepo root must still find it rather than report none.
+    """
+    for cand in ([f"{app_rel}/CHANGELOG.md"] if app_rel else []) + ["CHANGELOG.md"]:
+        if os.path.exists(os.path.join(repo, cand)):
+            return cand
+    return "CHANGELOG.md"
 
 
 def parse_changelog(repo, path="CHANGELOG.md"):
@@ -157,8 +190,21 @@ def parse_changelog(repo, path="CHANGELOG.md"):
     for i, line in enumerate(open(full, encoding="utf-8", errors="replace"), 1):
         m = VERSION_HEADING.match(line.rstrip())
         if m:
-            versions.append({"version": m.group(1), "date": m.group(2), "line": i})
+            raw = m.group(2)
+            dated = bool(raw and RELEASE_DATE.match(raw))
+            versions.append({"version": m.group(1), "date": raw if dated else None,
+                             "label": None if dated else raw, "line": i})
     return {"exists": True, "path": path, "versions": versions}
+
+
+def changelog_last_edit(repo, changelog):
+    """The newest commit that touched the changelog, or None.
+
+    Before any dated release there is no release boundary, and listing the whole
+    history buries the question that matters: what landed after the entry being
+    written was last updated, and so cannot be in it yet.
+    """
+    return sh(["git", "log", "-1", "--format=%H", "--", changelog], repo) or None
 
 
 def release_boundary(repo, changelog, version):
@@ -178,24 +224,52 @@ def release_boundary(repo, changelog, version):
     return None
 
 
-def commits_between(repo, since_sha, until="HEAD"):
+def sibling_prefixes(repo, app_rel):
+    """Git-root-relative prefixes of the app's sibling apps, e.g. ["apps/website/"].
+
+    In a monorepo laid out as apps/apple + apps/website, a feat(website) commit
+    is real news but not for this binary. Only siblings are excluded: a commit
+    touching anything else (a shared package at the root, say) could reach the
+    app, and a miss ships undocumented while a false hit costs a glance.
+    """
+    app_abs = os.path.join(repo, app_rel) if app_rel else repo
+    prefix = sh(["git", "rev-parse", "--show-prefix"], app_abs).rstrip("/")
+    top = sh(["git", "rev-parse", "--show-toplevel"], app_abs)
+    if not prefix or "/" not in prefix or not top:
+        return []
+    parent, own = prefix.rsplit("/", 1)
+    try:
+        names = os.listdir(os.path.join(top, parent))
+    except OSError:
+        return []
+    return sorted(f"{parent}/{n}/" for n in names
+                  if n != own and not n.startswith(".")
+                  and os.path.isdir(os.path.join(top, parent, n)))
+
+
+def commits_between(repo, since_sha, until="HEAD", outside=()):
     rng = f"{since_sha}..{until}" if since_sha else until
-    raw = sh(["git", "log", "--format=%H%x1f%s", rng], repo)
+    raw = sh(["git", "log", "--format=%x1e%H%x1f%s", "--name-only", rng], repo)
     out = []
-    for line in filter(None, raw.split("\n")):
-        sha, _, subject = line.partition("\x1f")
+    for block in filter(None, raw.split("\x1e")):
+        head, _, files = block.partition("\n")
+        sha, _, subject = head.partition("\x1f")
+        paths = [f for f in files.split("\n") if f.strip()]
         m = CONVENTIONAL.match(subject)
         ctype = m.group(1) if m else None
+        elsewhere = bool(outside and paths) and all(
+            any(f.startswith(o) for o in outside) for f in paths)
         out.append({
             "sha": sha[:8],
             "subject": subject,
             "type": ctype,
-            "user_facing": ctype in USER_FACING_TYPES if ctype else False,
+            "user_facing": (ctype in USER_FACING_TYPES if ctype else False) and not elsewhere,
+            "outside_app": elsewhere,
         })
     return out
 
 
-def find_unannounced(repo, changelog, prev_boundary, boundary):
+def find_unannounced(repo, changelog, prev_boundary, boundary, outside=()):
     """Commits that shipped in the LAST release but never made its notes.
 
     This is the trap. A feature merged before the release commit is in the
@@ -206,7 +280,7 @@ def find_unannounced(repo, changelog, prev_boundary, boundary):
     """
     if not boundary:
         return []
-    prior = commits_between(repo, prev_boundary, boundary)
+    prior = commits_between(repo, prev_boundary, boundary, outside)
     text = ""
     full = os.path.join(repo, changelog)
     if os.path.exists(full):
@@ -296,7 +370,7 @@ def normalize_metadata_root(raw):
     return trimmed
 
 
-def find_sidecars(repo, max_depth=4):
+def find_sidecars(repo, max_depth=6):
     """Every .listing.json in the repo, repo-relative, shallowest first."""
     found = []
     for dirpath, dirnames, filenames in os.walk(repo):
@@ -305,14 +379,54 @@ def find_sidecars(repo, max_depth=4):
         if depth >= max_depth:
             dirnames[:] = []
         else:
-            dirnames[:] = [d for d in dirnames if d not in PRUNE_DIRS]
+            # Hidden folders too: .claude/worktrees holds whole checkouts of this
+            # repo, each with its own sidecar, and auditing those is auditing a copy.
+            dirnames[:] = [d for d in dirnames
+                           if d not in PRUNE_DIRS and not d.startswith(".")]
         if SIDECAR_BASENAME in filenames:
             found.append("" if rel == "." else rel.replace(os.sep, "/"))
     return sorted(found, key=lambda p: (p.count("/"), p))
 
 
-def find_metadata_root(repo, override=None):
-    """Where this repo keeps its metadata tree, or None for markdown-doc mode.
+def is_locale_dir(name):
+    """A locale folder, and not a platform folder: "ios" is three letters, so the
+    locale pattern alone reads Listing/ios as a locale of Listing/."""
+    return bool(LOCALE_DIR_RE.match(name)) and path_platform(name) is None
+
+
+def has_locale_dirs(repo, root):
+    full = os.path.join(repo, root) if root else repo
+    try:
+        return any(is_locale_dir(d) and os.path.isdir(os.path.join(full, d))
+                   for d in os.listdir(full))
+    except OSError:
+        return False
+
+
+def expand_tree(repo, root):
+    """A root holding locales is one tree; one holding platform folders is several.
+
+    Listing/macos/en-US + Listing/ios/en-US is how a Mac + iOS app keeps one
+    listing per platform, exported or not. Treating Listing/ as the tree found no
+    locale in it and audited nothing.
+    """
+    if has_locale_dirs(repo, root):
+        return [root]
+    full = os.path.join(repo, root) if root else repo
+    try:
+        subs = sorted(os.listdir(full))
+    except OSError:
+        return []
+    return [under_root(root, d) for d in subs
+            if not d.startswith(".") and has_locale_dirs(repo, under_root(root, d))]
+
+
+def find_metadata_roots(repo, override=None, app_rel=""):
+    """Every metadata tree to audit, or [] for markdown-doc mode.
+
+    Several trees are normal: a Mac + iOS app has one per platform, each with its
+    own .listing.json when exported. All of them are audited, because every one
+    ships to customers and apply_listing gates each on its own limits.
 
     The miss rule is deliberately asymmetric. An explicit --metadata-root that
     is not there is a user error and must stop the audit: falling through would
@@ -327,33 +441,57 @@ def find_metadata_root(repo, override=None):
                 f"--metadata-root {override!r} is not a directory under {repo}. "
                 f"Nothing was audited. Check the path, or drop the flag to let the "
                 f"tree be found from its {SIDECAR_BASENAME}.")
-        return root
+        return expand_tree(repo, root) or [root]
 
-    sidecars = find_sidecars(repo)
-    if len(sidecars) > 1:
-        listed = ", ".join(f"{s}/{SIDECAR_BASENAME}" if s else SIDECAR_BASENAME
-                           for s in sidecars)
-        raise SystemExit(
-            f"Found more than one {SIDECAR_BASENAME} ({listed}). Pass --metadata-root "
-            f"to say which tree to audit.")
-    if len(sidecars) == 1:
-        return sidecars[0]
+    trees = list(find_sidecars(repo))
+    # Conventional roots, at --repo and beside the Xcode project. A platform
+    # folder that was never exported has no sidecar and is found only here.
+    bases = [""] + ([app_rel] if app_rel else [])
+    conventional = []
+    for base in bases:
+        present = [under_root(base, r) for r in DEFAULT_METADATA_ROOTS
+                   if os.path.isdir(os.path.join(repo, under_root(base, r)))]
+        flat = [r for r in present if has_locale_dirs(repo, r)
+                and not os.path.exists(os.path.join(repo, r, SIDECAR_BASENAME))]
+        if len(flat) > 1:
+            # Never guess between them. A repo caught mid-migration has both, and
+            # picking the first would audit the stale tree while the other is the one
+            # being edited -- silently reporting "in sync" about the wrong files.
+            raise SystemExit(
+                f"Found more than one conventional metadata root ({', '.join(flat)}) "
+                f"and no {SIDECAR_BASENAME} to disambiguate. Pass --metadata-root to say "
+                f"which tree to audit, or delete the one you no longer use.")
+        for r in present:
+            conventional += expand_tree(repo, r)
+    for t in conventional:
+        if t not in trees:
+            trees.append(t)
+    return sorted(trees, key=lambda p: (p.count("/"), p))
 
-    # No sidecar: a hand-authored tree at a conventional path still counts. A
-    # tree somewhere else with no sidecar needs the flag.
-    present = [r for r in DEFAULT_METADATA_ROOTS
-               if os.path.isdir(os.path.join(repo, r))]
-    if len(present) > 1:
-        # Never guess between them. A repo caught mid-migration has both, and
-        # picking the first would audit the stale tree while the other is the one
-        # being edited -- silently reporting "in sync" about the wrong files.
-        raise SystemExit(
-            f"Found more than one conventional metadata root ({', '.join(present)}) "
-            f"and no {SIDECAR_BASENAME} to disambiguate. Pass --metadata-root to say "
-            f"which tree to audit, or delete the one you no longer use.")
-    if present:
-        return present[0]
+
+# Folder names that say which platform a tree or screenshot config is for, when
+# no sidecar does. Matched as whole path segments, lowercased.
+PLATFORM_WORDS = {
+    "MAC_OS": ("macos", "mac", "osx"),
+    "IOS": ("ios", "iphone", "ipad", "listingmobile", "mobile"),
+    "VISION_OS": ("visionos", "vision"),
+    "TV_OS": ("tvos", "tv"),
+}
+
+
+def path_platform(path):
+    segs = [p.lower() for p in re.split(r"[/.]", path) if p]
+    for platform, words in PLATFORM_WORDS.items():
+        if any(w in segs for w in words):
+            return platform
     return None
+
+
+def tree_platform(repo, root):
+    """The platform a tree is for: the sidecar's word, else its folder's name."""
+    sidecar = read_sidecar(repo, root) or {}
+    return ((sidecar.get("version") or {}).get("platform")
+            or path_platform(root))
 
 
 def under_root(root, *parts):
@@ -420,7 +558,7 @@ def find_metadata_locales(repo, root, override=None):
         return []
     locales = sorted(d for d in os.listdir(full)
                      if os.path.isdir(os.path.join(full, d))
-                     and LOCALE_DIR_RE.match(d))
+                     and is_locale_dir(d))
     if not locales:
         return []
     if override:
@@ -786,13 +924,152 @@ def screenshot_sync(repo, config_rel, store_rel="APPSTORE.md"):
     }
 
 
-def find_screenshot_config(repo):
+def find_screenshot_configs(repo):
+    """Every screenshot config in the repo, repo-relative, sorted.
+
+    A list rather than the first hit, because a multi-platform repo has one per
+    platform (`screenshots.config.json` and `screenshots.ios.config.json`) and
+    os.walk has no meaningful order: picking the first reported the iOS config
+    while auditing the Mac listing, and named a screen count belonging to the
+    other platform. That is the `.listing.json` ambiguity again, which this
+    script already refuses to guess at -- but this section is advisory rather
+    than a gate, so reporting all of them beats refusing to report any.
+
+    A manifest is not a config: `golden/manifest.json` sits under a directory
+    whose name contains "screenshot" in some layouts, and it carries hashes, not
+    taglines.
+    """
+    out = []
     for root, dirs, files in os.walk(repo):
         dirs[:] = [d for d in dirs if not d.startswith(".") and d != "node_modules"]
         for f in files:
-            if "screenshot" in f.lower() and f.endswith(".json"):
-                return os.path.relpath(os.path.join(root, f), repo)
-    return None
+            if "screenshot" in f.lower() and f.endswith(".json") and f != "manifest.json":
+                out.append(os.path.relpath(os.path.join(root, f), repo))
+    return sorted(out)
+
+
+def find_family_configs(repo):
+    """Every `family.config.json` (appshot `compose family`), repo-relative, sorted.
+
+    Found by name rather than by the "screenshot" match above, which a family config
+    never hits, and read on its own terms: it has `composites`, not `screens`.
+    """
+    out = []
+    for root, dirs, files in os.walk(repo):
+        dirs[:] = [d for d in dirs if not d.startswith(".") and d != "node_modules"]
+        if "family.config.json" in files:
+            out.append(os.path.relpath(os.path.join(root, "family.config.json"), repo))
+    return sorted(out)
+
+
+def family_claims(repo, config_rel):
+    """The captions of each family image, per locale, for a person to check.
+
+    A family image shows one app on several devices, and its caption is where the
+    listing's cross-device promises get restated in six words: what syncs, what Pro
+    covers, which devices. Those are the claims that go stale when the description
+    changes (sync moving behind Pro, a device dropped), and a tagline match cannot
+    see it, because the caption paraphrases rather than quotes. So this lists them
+    and judges nothing.
+    """
+    try:
+        data = json.load(open(os.path.join(repo, config_rel), encoding="utf-8"))
+    except (json.JSONDecodeError, OSError) as e:
+        return {"config": config_rel, "error": f"unreadable: {e}"}
+    composites = []
+    for c in data.get("composites", []):
+        captions = {}
+        if c.get("captions"):
+            for loc, cap in sorted(c["captions"].items()):
+                captions[loc] = [cap.get("title"), cap.get("subtitle")]
+        elif c.get("title"):
+            captions["-"] = [c.get("title"), c.get("subtitle")]
+        composites.append({
+            "id": c.get("id"),
+            "devices": c.get("devices", []),
+            "store": c.get("store"),
+            "captions": captions,
+        })
+    return {"config": config_rel, "composites": composites}
+
+
+def video_claims(repo, config_rel):
+    """The words baked into each `videos[]` entry (appshot `compose video`), for a
+    person to check against the description, and whether the local render is older
+    than the captures it was cut from.
+
+    A video built `--from-stills` reuses the screenshot captures, so a UI change that
+    makes the screenshots stale makes it stale too, and nothing on the store says so:
+    a preview is a separate upload, outside anything this audit can see. Its hook and
+    captions are short claims, like a family caption, and get the same treatment:
+    listed, never judged. Accent marks (`*word*`) are stripped, since they are styling.
+
+    Staleness is read from file times next to the config: the newest render report
+    under `videos/report/` against the newest capture under `source/` of each screen
+    the video shows. Both directories are local and usually gitignored, so a fresh
+    clone has neither, which is reported as "not rendered here", not as stale. A
+    video with `cue` beats is recorded from the running app rather than cut from
+    stills, so its captures are not compared.
+    """
+    try:
+        data = json.load(open(os.path.join(repo, config_rel), encoding="utf-8"))
+    except (json.JSONDecodeError, OSError) as e:
+        return {"config": config_rel, "error": f"unreadable: {e}"}
+    videos = data.get("videos") or []
+    if not videos:
+        return None
+    base = os.path.dirname(os.path.join(repo, config_rel))
+    plain = lambda t: (t or "").replace("*", "").strip()
+
+    def newest(paths):
+        times = [os.path.getmtime(p) for p in paths if os.path.exists(p)]
+        return max(times) if times else None
+
+    out = []
+    for v in videos:
+        beats = v.get("beats") or []
+        recorded = any(b.get("cue") for b in beats)
+        screens = []
+        for name in [v.get("stage")] + [b.get("screen") for b in beats]:
+            if name and name not in screens:
+                screens.append(name)
+        card = v.get("card") or {}
+        report_dir = os.path.join(base, "videos", "report")
+        reports = []
+        if os.path.isdir(report_dir):
+            reports = [os.path.join(report_dir, f) for f in os.listdir(report_dir)
+                       if f.startswith(f"{v.get('id')}~") and f.endswith(".report.json")]
+        rendered = newest(reports)
+        stale = []
+        if rendered is not None and not recorded:
+            src = os.path.join(base, "source")
+            for name in screens:
+                shots = []
+                if os.path.isdir(src):
+                    shots = [os.path.join(src, f) for f in os.listdir(src)
+                             if f.startswith(f"{name}~") and f.endswith(".png")]
+                captured = newest(shots)
+                if captured is not None and captured > rendered:
+                    stale.append(name)
+        outputs = v.get("outputs") or {}
+        out.append({
+            "id": v.get("id"),
+            # `preview` and `website` are switches; `promo` is a list of [w, h] sizes.
+            "preview": outputs.get("preview") is True,
+            "promo": [f"{p[0]}x{p[1]}" for p in outputs.get("promo") or []
+                      if isinstance(p, list) and len(p) == 2],
+            "website": outputs.get("website") is True,
+            "duration": v.get("duration"),
+            "motion": v.get("motion"),
+            "recorded": recorded,
+            "screens": screens,
+            "hook": plain(v.get("hook")) or None,
+            "captions": [[b.get("at"), plain(b.get("caption"))] for b in beats if b.get("caption")],
+            "card": [plain(card.get(k)) for k in ("title", "subtitle", "cta") if card.get(k)],
+            "rendered": rendered is not None,
+            "stale_screens": stale,
+        })
+    return {"config": config_rel, "videos": out}
 
 
 # --------------------------------------------------------------------------
@@ -802,9 +1079,12 @@ def version_key(v):
     return tuple(int(p) if p.isdigit() else 0 for p in v.split("."))
 
 
-def audit(repo, fields_file=None, live_fields=None, locale=None, metadata_root=None):
+def audit(repo, fields_file=None, live_fields=None, locale=None, metadata_root=None,
+          first_release=False):
     versions = read_versions(repo)
-    cl = parse_changelog(repo)
+    app_rel = versions.get("app_dir") or ""
+    cl = parse_changelog(repo, find_changelog(repo, app_rel))
+    outside = sibling_prefixes(repo, app_rel)
     dated = [v for v in cl["versions"] if v["version"].lower() != "unreleased" and v["date"]]
     # Newest-first is the Keep a Changelog convention, but a project that writes
     # oldest-first would otherwise invert the release boundary silently -- and a
@@ -815,43 +1095,70 @@ def audit(repo, fields_file=None, live_fields=None, locale=None, metadata_root=N
 
     boundary = release_boundary(repo, cl["path"], last_released)
     prev_boundary = release_boundary(repo, cl["path"], prev_released)
+    boundary_kind = "release" if boundary else None
+    if not boundary and cl["exists"]:
+        # No release yet: everything so far goes into the entry being written, and
+        # what it can be missing is what landed after it was last edited.
+        boundary = changelog_last_edit(repo, cl["path"])
+        boundary_kind = "changelog-edit" if boundary else None
 
     shipping = versions["marketing_version"]
     already_documented = any(
         v["version"] == shipping and v["date"] for v in cl["versions"]
     ) if shipping else False
+    undated = next((v for v in cl["versions"]
+                    if v["version"] == shipping and not v["date"]), None) if shipping else None
 
-    cfg = find_screenshot_config(repo)
-    # A fastlane metadata tree is unambiguous, so prefer it; an explicit
-    # --fields-file still wins, and a project without the tree keeps the
-    # markdown-doc parser it has always used.
-    root = None if fields_file else find_metadata_root(repo, metadata_root)
-    metadata_locales = [] if root is None else find_metadata_locales(repo, root, locale)
-    if metadata_locales:
-        store = read_metadata_tree(repo, root, metadata_locales)
-        # The prose lives in several files now, so the em-dash scan takes a list.
+    cfgs = find_screenshot_configs(repo)
+    # A metadata tree is unambiguous, so prefer it; an explicit --fields-file
+    # still wins, and a project without a tree keeps the markdown-doc parser it
+    # has always used. Every tree is measured: one per platform is the norm.
+    roots = [] if fields_file else find_metadata_roots(repo, metadata_root, app_rel)
+    stores, prose = [], []
+    for root in roots:
+        locales = find_metadata_locales(repo, root, locale)
+        if not locales:
+            continue
+        st = read_metadata_tree(repo, root, locales)
+        st["platform"] = tree_platform(repo, root)
+        stores.append(st)
         # Every locale is scanned: copy written by a translator drifts the same way.
-        prose = [under_root(root, loc, n)
-                 for loc in metadata_locales
-                 for n in ("description.txt", "release_notes.txt",
-                           "promotional_text.txt", "subtitle.txt")]
-        # screenshot_sync wants one document to look for taglines in; the primary
-        # locale's description is where a tagline would appear.
-        store_doc = under_root(root, metadata_locales[0], "description.txt")
-    else:
+        prose += [under_root(root, loc, n)
+                  for loc in locales
+                  for n in ("description.txt", "release_notes.txt",
+                            "promotional_text.txt", "subtitle.txt")]
+    if not stores:
         store_doc = find_store_doc(repo, fields_file)
-        store = parse_store_fields(repo, store_doc)
+        if not fields_file and app_rel and not os.path.exists(os.path.join(repo, store_doc)):
+            beside = find_store_doc(os.path.join(repo, app_rel))
+            if os.path.exists(os.path.join(repo, app_rel, beside)):
+                store_doc = under_root(app_rel, beside)
+        st = parse_store_fields(repo, store_doc)
+        st["platform"] = None
+        stores.append(st)
         prose = [store_doc]
+
+    def doc_for(cfg):
+        """The document a screenshot config's taglines should appear in: the
+        primary-locale description of the tree for the same platform."""
+        want = path_platform(cfg)
+        st = next((t for t in stores if want and t.get("platform") == want), stores[0])
+        if st.get("source") == "metadata-dir":
+            return under_root(st["root"], st["locales"][0]["locale"], "description.txt")
+        return st["path"]
+
+    store = stores[0]
     live = compare_live(store, normalize_live_fields(live_fields) if live_fields is not None else None)
 
     # Release notes are required once there is a previous release to differ from,
     # but Apple rejects a "What's New" on a first version -- so demanding one for a
     # 1.0 would gate the release on copy that must not exist.
     required = set(REQUIRED_FIELDS)
-    if not last_released:
+    if not last_released or first_release:
         required.discard("WHAT'S NEW")
-    for entry in store["locales"]:
-        entry["missing_required"] = sorted(required - set(entry["fields"]))
+    for st in stores:
+        for entry in st["locales"]:
+            entry["missing_required"] = sorted(required - set(entry["fields"]))
 
     return {
         "repo": repo,
@@ -860,16 +1167,26 @@ def audit(repo, fields_file=None, live_fields=None, locale=None, metadata_root=N
             "last_documented_release": last_released,
             "shipping": shipping,
             "already_documented": already_documented,
+            "undated_entry": undated,
         },
         "changelog": cl,
-        "boundary": {"sha": boundary[:8] if boundary else None, "of_version": last_released},
-        "commits_this_release": commits_between(repo, boundary),
-        "unannounced_from_last_release": find_unannounced(repo, cl["path"], prev_boundary, boundary),
+        "boundary": {"sha": boundary[:8] if boundary else None, "of_version": last_released,
+                     "kind": boundary_kind},
+        "commits_this_release": commits_between(repo, boundary, outside=outside),
+        "unannounced_from_last_release": (
+            find_unannounced(repo, cl["path"], prev_boundary, boundary, outside)
+            if boundary_kind == "release" else []),
+        "outside_app": outside,
+        # "store" is the first tree, kept for callers that read one; "stores" is
+        # every tree, and the exit code gates on all of them.
         "store": store,
+        "stores": stores,
         "live": live,
         "em_dashes": scan_em_dashes(repo, prose),
-        "em_dashes_changelog": scan_em_dashes(repo, ["CHANGELOG.md"]),
-        "screenshots": screenshot_sync(repo, cfg, store_doc) if cfg else None,
+        "em_dashes_changelog": scan_em_dashes(repo, [cl["path"]]),
+        "screenshots": [r for r in (screenshot_sync(repo, c, doc_for(c)) for c in cfgs) if r],
+        "family": [family_claims(repo, c) for c in find_family_configs(repo)],
+        "videos": [r for r in (video_claims(repo, c) for c in cfgs) if r],
     }
 
 
@@ -879,6 +1196,14 @@ def report(a):
     L.append("VERSION")
     L.append(f"  shipping (MARKETING_VERSION): {v['marketing_version'] or '??'}  build {v['build'] or '?'}")
     L.append(f"  last documented release:      {v['last_documented_release'] or 'none'}")
+    if v.get("app_dir"):
+        L.append(f"  app directory:                {v['app_dir']}/  (holds the Xcode project)")
+    L.append(f"  changelog:                    {a['changelog']['path']}"
+             + ("" if a["changelog"]["exists"] else "  (not found)"))
+    und = v.get("undated_entry")
+    if und:
+        L.append(f"  {v['marketing_version']} is in the changelog as "
+                 f"\"{und['label'] or 'undated'}\": the entry being written, not a release.")
     if v.get("ambiguous_version"):
         L.append(f"  ! pbxproj holds several MARKETING_VERSIONs: {', '.join(v['all_marketing_versions'])}")
         L.append("    The first one was used. Confirm it belongs to the app target, not a test target.")
@@ -890,11 +1215,21 @@ def report(a):
     L.append("")
 
     b = a["boundary"]
-    L.append(f"RELEASE BOUNDARY  ({b['of_version']} -> {b['sha'] or 'not found'})")
     commits = a["commits_this_release"]
     news = [c for c in commits if c["user_facing"]]
     other = [c for c in commits if not c["user_facing"]]
+    if b.get("kind") == "changelog-edit":
+        L.append(f"SINCE THE CHANGELOG WAS LAST EDITED  (no dated release yet -> {b['sha']})")
+        L.append("  Nothing has shipped, so every commit belongs to this release. These landed")
+        L.append("  after the entry was last touched, so it cannot mention them yet:")
+    else:
+        L.append(f"RELEASE BOUNDARY  ({b['of_version']} -> {b['sha'] or 'not found'})")
     L.append(f"  {len(commits)} commit(s) since the boundary; {len(news)} user-facing")
+    if a.get("outside_app"):
+        away = sum(1 for c in commits if c.get("outside_app"))
+        if away:
+            L.append(f"  ({away} touch only {', '.join(o.rstrip('/') for o in a['outside_app'])},"
+                     f" outside this app's binary)")
     for c in news:
         L.append(f"    + {c['sha']}  {c['subject']}")
     for c in other:
@@ -913,47 +1248,56 @@ def report(a):
         L.append("  none detected")
     L.append("")
 
-    s = a["store"]
-    sidecar = s.get("sidecar")
-    if sidecar:
-        L.append(f"EXPORTED LISTING  ({s.get('sidecar_path', SIDECAR_BASENAME)})")
-        L.append(f"  version {sidecar['version']}  state {sidecar['app_store_state'] or 'unknown'}"
-                 f"  exported {sidecar['exported_at']}")
-        if not sidecar["editable"]:
-            L.append(f"  ! this export is pointed at a {sidecar['app_store_state']} version -- the SHIPPED one.")
-            L.append("    export_listing's \"latest\" falls back to the live version when no editable one")
-            L.append("    exists, so applying release notes here edits the release that is already out.")
-            L.append("    Create the new version first (app_store_connect_create_version), then re-export.")
-            L.append("    Note NAME, SUBTITLE and PRIVACY URL are appInfo-scoped and bypass version state")
-            L.append("    entirely, so they are not protected even on an editable version.")
-        L.append("")
+    for s in a.get("stores") or [a["store"]]:
+        sidecar = s.get("sidecar")
+        if sidecar:
+            L.append(f"EXPORTED LISTING  ({s.get('sidecar_path', SIDECAR_BASENAME)})")
+            L.append(f"  version {sidecar['version']}  state {sidecar['app_store_state'] or 'unknown'}"
+                     f"  exported {sidecar['exported_at']}")
+            if not sidecar["editable"]:
+                L.append(f"  ! this export is pointed at a {sidecar['app_store_state']} version -- the SHIPPED one.")
+                L.append("    export_listing's \"latest\" falls back to the live version when no editable one")
+                L.append("    exists, so applying release notes here edits the release that is already out.")
+                L.append("    Create the new version first (app_store_connect_create_version), then re-export.")
+                L.append("    Note NAME, SUBTITLE and PRIVACY URL are appInfo-scoped and bypass version state")
+                L.append("    entirely, so they are not protected even on an editable version.")
+            L.append("")
 
-    origin = "metadata tree" if s.get("source") == "metadata-dir" else "markdown doc"
-    L.append(f"APP STORE FIELDS  ({s['path']} -- {origin})")
-    if not s["exists"]:
-        L.append("  ! file does not exist -- every field needs writing from scratch")
-    for entry in s["locales"]:
-        if entry["locale"]:
-            L.append(f"  [{entry['locale']}]")
-        for name, f in entry["fields"].items():
-            flag = "OK  " if f["ok"] else "OVER"
-            # A field edited since export is what you pass to apply_listing; a field
-            # that never had a baseline (no sidecar, or newly created) is unknown, not
-            # unchanged, so it gets no marker rather than a misleading one.
-            mark = " *" if f.get("changed_since_export") else ""
-            L.append(f"  {flag} {name:<18} {f['chars']:>5} / {f['limit']}"
-                     + (f"  (over by {f['over_by']})" if not f["ok"] else "") + mark)
-            for note in f.get("notes", []):
-                L.append(f"       - {note}")
-        for name in entry["missing"]:
-            tag = "MISSING " if name in entry.get("missing_required", []) else "unset   "
-            L.append(f"  {tag}{name:<16} (limit {FIELD_LIMITS[name]})")
-        if entry["edited_since_export"]:
-            files = [entry["fields"][n]["file"] for n in entry["edited_since_export"]]
-            L.append("  * edited since export, pass these to apply_listing:")
-            for p in files:
-                L.append(f"      {p}")
-    L.append("")
+        origin = "metadata tree" if s.get("source") == "metadata-dir" else "markdown doc"
+        plat = f", {s['platform']}" if s.get("platform") else ""
+        L.append(f"APP STORE FIELDS  ({s['path']} -- {origin}{plat})")
+        if not s["exists"]:
+            L.append("  ! file does not exist -- every field needs writing from scratch")
+        for entry in s["locales"]:
+            if entry["locale"]:
+                L.append(f"  [{entry['locale']}]")
+            for name, f in entry["fields"].items():
+                flag = "OK  " if f["ok"] else "OVER"
+                # A field edited since export is what you pass to apply_listing; a field
+                # that never had a baseline (no sidecar, or newly created) is unknown, not
+                # unchanged, so it gets no marker rather than a misleading one.
+                mark = " *" if f.get("changed_since_export") else ""
+                L.append(f"  {flag} {name:<18} {f['chars']:>5} / {f['limit']}"
+                         + (f"  (over by {f['over_by']})" if not f["ok"] else "") + mark)
+                for note in f.get("notes", []):
+                    L.append(f"       - {note}")
+            for name in entry["missing"]:
+                tag = "MISSING " if name in entry.get("missing_required", []) else "unset   "
+                L.append(f"  {tag}{name:<16} (limit {FIELD_LIMITS[name]})")
+                # The one MISSING that is routinely a false positive, because the
+                # changelog cannot see per-platform history. Say so here rather than
+                # letting a red gate argue with someone who is already right.
+                if name == "WHAT'S NEW" and name in entry.get("missing_required", []):
+                    L.append("       - if this is the FIRST version on this platform, Apple shows no")
+                    L.append("         What's New and the field must stay empty: re-run with")
+                    L.append("         --first-release. A new platform in an existing app hits this,")
+                    L.append("         since its first version inherits the app's version number.")
+            if entry["edited_since_export"]:
+                files = [entry["fields"][n]["file"] for n in entry["edited_since_export"]]
+                L.append("  * edited since export, pass these to apply_listing:")
+                for p in files:
+                    L.append(f"      {p}")
+        L.append("")
 
     live = a.get("live")
     if live is not None:
@@ -988,8 +1332,7 @@ def report(a):
         L.append(f"  ({len(cl_em)} more in CHANGELOG.md -- developer-facing, so optional)")
     L.append("")
 
-    sc = a["screenshots"]
-    if sc:
+    for sc in a["screenshots"] or []:
         L.append(f"SCREENSHOTS  ({sc['config']})")
         if sc.get("error"):
             L.append(f"  ! {sc['error']}")
@@ -1004,6 +1347,61 @@ def report(a):
                 L.append(f"      {d['screen']}.{d['key']}: {d['config_value'][:80]}")
         else:
             L.append(f"  {len(sc['screens'])} screen(s), in sync with the doc")
+    if len(a["screenshots"] or []) > 1:
+        L.append("  Several configs: each drives its own platform's store images, and a screen")
+        L.append("  present here is NOT proof the feature is reachable on that platform. A")
+        L.append("  staging harness that sets view state directly will photograph a screen whose")
+        L.append("  only entry point is behind an #if, so check the entry point, not the capture.")
+
+    for fam in a.get("family") or []:
+        L.append("")
+        L.append(f"FAMILY IMAGES  ({fam['config']})")
+        if fam.get("error"):
+            L.append(f"  ! {fam['error']}")
+            continue
+        L.append("  Cross-device claims baked into the images. Check each against the")
+        L.append("  description: what syncs, what Pro covers, which devices.")
+        for comp in fam["composites"]:
+            where = " + ".join(comp["devices"])
+            slot = "  [Mac listing slot, uploaded by hand]" if comp["store"] == "mac" else ""
+            L.append(f"  {comp['id']} ({where}){slot}")
+            if not comp["captions"]:
+                L.append("      (no caption)")
+            for loc, (title, subtitle) in comp["captions"].items():
+                tag = "" if loc == "-" else f"[{loc}] "
+                L.append(f"      {tag}{title or ''}")
+                if subtitle:
+                    L.append(f"      {' ' * len(tag)}{subtitle}")
+
+    for vc in a.get("videos") or []:
+        L.append("")
+        L.append(f"VIDEOS  ({vc['config']})")
+        if vc.get("error"):
+            L.append(f"  ! {vc['error']}")
+            continue
+        L.append("  Claims baked into each video. Check them against the description. An App")
+        L.append("  Store preview is a separate upload: app_store_connect_upload_preview.")
+        for v in vc["videos"]:
+            kinds = ", ".join(
+                (["App Store preview"] if v["preview"] else [])
+                + ([f"promo {' '.join(v['promo'])}"] if v["promo"] else [])
+                + (["website"] if v["website"] else [])) or "no outputs"
+            how = "recorded" if v["recorded"] else "from stills"
+            motion = f", {v['motion']}" if v.get("motion") else ""
+            store = "  [separate upload]" if v["preview"] else ""
+            L.append(f"  {v['id']} ({kinds}; {v['duration']}s{motion}, {how}){store}")
+            if v["hook"]:
+                L.append(f"      hook: {v['hook']}")
+            for at, text in v["captions"]:
+                L.append(f"      {at}s  {text}")
+            if v["card"]:
+                L.append(f"      card: {' / '.join(v['card'])}")
+            if not v["rendered"]:
+                L.append("      not rendered here (no videos/report next to the config)")
+            elif v["stale_screens"]:
+                again = " and upload the preview again" if v["preview"] else ""
+                L.append(f"      ! rendered before the latest capture of: {', '.join(v['stale_screens'])}."
+                         f" Re-render it{again}.")
     return "\n".join(L)
 
 
@@ -1018,11 +1416,20 @@ def main():
                     help="Narrow the audit to ONE locale under the metadata root. Every locale "
                          "is audited by default, because apply_listing refuses the whole push if "
                          "any single locale is over limit.")
+    ap.add_argument("--first-release", action="store_true",
+                    help="This is the FIRST version for this platform, so Apple shows no "
+                         "What's New and the field must stay empty. Needed when the repo "
+                         "ships several platforms from one CHANGELOG: a new platform's "
+                         "first version can carry a high version number with a long "
+                         "release history above it, which the changelog cannot tell apart "
+                         "from an ordinary update.")
     ap.add_argument("--metadata-root", default=None,
-                    help="Repo-relative path to the metadata tree. Auto-detected from a "
-                         ".listing.json, else fastlane/metadata or Listing; a tree elsewhere with "
-                         "no sidecar needs this flag, as does a repo holding both conventional "
-                         "roots. If the path given does not exist the audit "
+                    help="Repo-relative path to ONE metadata tree, or to a folder of per-platform "
+                         "trees (Listing/ holding macos/ and ios/). Auto-detected otherwise: every "
+                         ".listing.json, plus fastlane/metadata or Listing at --repo and beside the "
+                         "Xcode project, each platform folder audited as its own tree. A tree "
+                         "elsewhere with no sidecar needs this flag, as does a repo holding both "
+                         "conventional roots. If the path given does not exist the audit "
                          "fails rather than falling back to the markdown-doc parser.")
     ap.add_argument("--live-fields", default=None,
                     help="JSON file of the LIVE App Store Connect fields, to diff against the "
@@ -1043,7 +1450,7 @@ def main():
             live_fields = row.get("attributes", row)
 
     a = audit(repo, fields_file=args.fields_file, live_fields=live_fields, locale=args.locale,
-              metadata_root=args.metadata_root)
+              metadata_root=args.metadata_root, first_release=args.first_release)
     if args.json:
         json.dump(a, sys.stdout, indent=2)
         print()
@@ -1053,9 +1460,11 @@ def main():
     # Every locale counts: apply_listing refuses the whole push if any one of them
     # is over. Only genuinely required fields gate -- an unset marketing URL is a
     # choice, and failing the build over it would train people to ignore the gate.
-    broken = not a["store"]["exists"] or any(
-        any(not f["ok"] for f in entry["fields"].values()) or entry["missing_required"]
-        for entry in a["store"]["locales"]
+    broken = any(
+        not st["exists"] or any(
+            any(not f["ok"] for f in entry["fields"].values()) or entry["missing_required"]
+            for entry in st["locales"])
+        for st in a["stores"]
     )
     return 1 if broken else 0
 

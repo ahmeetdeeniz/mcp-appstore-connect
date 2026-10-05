@@ -63,3 +63,17 @@ export class WritesDisabledError extends Error {
     );
   }
 }
+
+/**
+ * A local check that failed before we sent anything to Apple. Carries the state
+ * it read, so the caller sees why rather than just that something was wrong.
+ */
+export class PreconditionError extends Error {
+  override readonly name = "PreconditionError";
+  constructor(
+    message: string,
+    readonly details: Record<string, unknown>,
+  ) {
+    super(message);
+  }
+}

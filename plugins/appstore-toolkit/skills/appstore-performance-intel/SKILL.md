@@ -96,8 +96,27 @@ Start with sales, because it always works:
 app_store_connect_download_sales_report { reportDate, frequency, reportType: "SALES", maxLines: 5000 }
 ```
 
-Then the analytics walk. It is four hops and the first one is the one people
-skip:
+Then analytics. **Reach for `get_analytics_report` first** — it walks the whole
+chain in one call:
+
+```
+app_store_connect_get_analytics_report { appId, category: "APP_STORE_ENGAGEMENT",
+                                         granularity: "MONTHLY", savePath: "<abs>/…csv" }
+```
+
+Read three things out of it before using the numbers:
+
+- `selection` — which report and instance it chose, and the `alternatives` it
+  passed over. `COMMERCE` holds both "App Store Downloads" and "App Store
+  Purchases", which answer different questions; if you wanted the other one, pass
+  `reportName`.
+- `coverage` — the real first and last `Date` in the data. This is the period you
+  actually got. Do **not** use `selection.processingDate` for that: it is when
+  Apple generated the instance, and a fresh snapshot reports today while holding
+  a year of history.
+- `duplicateRows` — see the ONGOING-monthly hazard below. It is not swallowed.
+
+The four hops remain for anything the one-shot does not cover:
 
 ```
 app_store_connect_list_analytics_report_requests    { appId }
@@ -107,7 +126,9 @@ app_store_connect_download_analytics_report_segment { instanceId }
 ```
 
 **If there is no report request, analytics is not merely empty — it has never
-been enabled.** Creating one needs `create_analytics_report_request`, a write
+been enabled.** `get_analytics_report` says so directly, with
+`{"empty": true, "reason": "NO_REPORT_REQUEST", "writesEnabled": …}`, rather than
+returning nothing. Creating one needs `create_analytics_report_request`, a write
 tool that only exists when the server runs with
 `APP_STORE_CONNECT_ALLOW_WRITES=1`. If you cannot see that tool, that is the
 reason; say so and let the user opt in. Even once created, Apple takes a day or
@@ -163,21 +184,28 @@ app_store_connect_download_analytics_report_segment{ …, savePath: "<abs>/repor
 
 The file gets the report **in full**, and `maxLines` then only trims the copy
 inlined in the response. So `maxLines` stops being a correctness problem: set it
-low to keep the response small, and the saved file is still complete. When the
-inline copy is truncated the response says so explicitly, and `saved.dataRows`
-tells you what actually landed. Use an absolute path in or under the repo's
-scratch or report directory.
+low to keep the response small, and the saved file is still complete. The flag
+that says the inline copy was trimmed is `inlineTruncated`, and it describes only
+that copy; `saved.dataRows` tells you what actually landed on disk. Use an
+absolute path in or under the repo's scratch or report directory.
 
 This replaces retyping a report into a file by hand, which is where rows went
 missing — a report short one row still sums to a perfectly plausible number, and
 nothing downstream notices.
 
+**Every read takes `savePath` too**, not just the report downloads — `list_apps`,
+`list_versions`, `get_version`, `list_builds`, `list_customer_reviews` and the
+rest write their JSON result to the path you give. Use it for anything that ends
+up in a document. The same transcription failure applies: eight apps' shipping
+`minOsVersion` floors were once read out of tool responses and retyped into a
+cache by hand, and were wrong by the time anyone read them back.
+
 If you ever do have to transcribe a response by hand, guard it with the counts
-the response already carries: `dataRows` is the number of data rows, `rows` is
+the response already carries: `dataRows` is the number of data rows, `lines` is
 that plus the header line. Assert one of them after writing —
 
 ```python
-assert len(body) == payload["dataRows"]      # or: len(body) + 1 == payload["rows"]
+assert len(body) == payload["dataRows"]      # or: len(body) + 1 == payload["lines"]
 ```
 
 — so a dropped row fails loudly instead of quietly shaving a total.
@@ -234,6 +262,12 @@ The script refuses to work on a truncated file and exits non-zero. That is
 deliberate: re-fetch with a higher `maxLines` or a narrower window. Passing
 `--allow-truncated` to get past it turns every total in your report into a
 floor, and nothing downstream will remind you.
+
+Handed a saved **tool result** rather than a raw TSV, it follows the `saved.path`
+inside it and reads the complete file, so a result whose inline copy was trimmed
+is not refused when the full report is sitting on disk beside it. It says which
+file it read. The path is only used when its size matches the `saved.bytes` the
+result recorded, so a stale or half-written file is refused rather than totalled.
 
 It also warns when a file contains **exact duplicate rows**. Apple's reports are
 aggregates keyed by their dimension columns, so a repeated row means the file
@@ -327,14 +361,23 @@ stopping when one holds:
    purchases? Did a price change move proceeds without moving units?
 5. **Apple's own reporting.** Late-arriving corrections, an empty date, a
    changed report shape — and a period that reads as zero because it was never
-   generated. `download_sales_report` answers a period with no rows as an
-   **HTTP 404**, `NOT_FOUND` / "There were no sales for the date specified". That
-   is Apple's empty answer, not a broken call, but it is also what a
-   not-yet-generated WEEKLY or MONTHLY looks like, and the two mean opposite
-   things. Separate them by asking a finer granularity for the same span: if the
-   WEEKLY 404s while DAILY reports inside that week return sales, the week is a
-   reporting lag and reporting it as zero would be flatly wrong. Only after the
-   dailies also come back empty is a zero real.
+   generated. Apple answers a period with no rows and a period it has not
+   assembled yet with the **same HTTP 404**, and the two mean opposite things.
+   You no longer have to tell them apart by hand: `download_sales_report`
+   returns `{"empty": true, "reason": …, "confidence": …}` instead of failing,
+   and the reason is the answer. Read it, do not re-derive it:
+
+   - `NO_ROWS` / `REGION_EMPTY` with `confidence: "proven"` — a real zero.
+     Record it as 0.
+   - `WITHIN_GENERATION_LAG`, `NOT_YET_GENERATED` — reporting lag. **Not** a
+     zero. Recording it as one understates the period.
+   - `NO_ROWS_OBSERVED`, `UNDETERMINED`, `BEYOND_RETENTION`, `FUTURE_PERIOD` —
+     nothing was established. Say the period is unmeasured rather than empty.
+
+   The `evidence` block says what was actually checked. Do not run your own
+   finer-granularity sweep to second-guess a `proven` verdict — the server
+   already did it, and re-running it spends a request per day for an answer you
+   have.
 
 If none of them holds, say the movement is unexplained. An honest "down 19% and
 I can't attribute it" is worth more than a confident guess, and it tells the
@@ -419,7 +462,11 @@ Volume, recency, and whether a cluster lines up with a release.
 
 ## Recommendations
 
-Store-side actions only, each one naming the number it comes from.
+Store-side actions only, each one naming the number it comes from. An app preview counts
+as one when the measured weak step is the product page itself (page views not becoming
+downloads) and the listing has none. Check that with `app_store_connect_list_preview_sets`
+on the live version's localizations; the `appshot-video` skill makes one from the app's own
+screenshots, and `app_store_connect_upload_preview` puts it on the store.
 
 ## Gaps
 

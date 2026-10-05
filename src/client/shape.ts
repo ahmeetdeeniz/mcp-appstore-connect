@@ -38,6 +38,22 @@ export const includedOf = (response: unknown, type: string): Rec[] => {
   return response.included.filter((item): item is Rec => isRecord(item) && item.type === type);
 };
 
+/**
+ * Sideloaded resources of a type, keyed by id, so each parent can be matched to
+ * its own.
+ *
+ * `firstIncluded` is right for a single-resource response and quietly wrong for
+ * a collection: ten versions with ten sideloaded builds would every one of them
+ * be handed `included[0]`, and the result reads as ten apps sharing a binary
+ * rather than as a bug.
+ */
+export const includedIndex = (response: unknown, type: string): Map<string, Rec> =>
+  new Map(
+    includedOf(response, type)
+      .filter((res) => typeof res.id === "string")
+      .map((res) => [res.id as string, res] as const),
+  );
+
 export type Resource = {
   type?: unknown;
   id?: unknown;
@@ -53,8 +69,56 @@ export const summarizeResource = (value: unknown): unknown => {
 };
 
 /**
+ * Whether this page is only part of the collection, and by how much.
+ *
+ * Apple puts the full count in `meta.paging.total` and quietly caps `data` at
+ * `limit`. Nothing in the rows themselves says they are a subset, so a caller
+ * reading a full page concludes the collection is what it can see — and then
+ * reports something as ABSENT because it fell off the end. That happened for
+ * real: a capped `list_builds` page was read as "half the upload never landed",
+ * which would have sent someone re-uploading a build that was already there.
+ *
+ * Returned as a block rather than a bare flag so the numbers travel with the
+ * claim, and named for what it says about the DATA — `truncated` already means
+ * something else on the report envelope.
+ */
+const incompletePage = (
+  data: unknown[],
+  meta: unknown,
+  next: string | undefined,
+): Rec | undefined => {
+  const paging = isRecord(meta) && isRecord(meta.paging) ? meta.paging : undefined;
+  const total = typeof paging?.total === "number" ? paging.total : undefined;
+  const missing = total === undefined ? undefined : total - data.length;
+  if (missing === undefined) {
+    // No total from Apple — a `next` link is then the only evidence, and it is
+    // enough to know the page is not the whole collection.
+    if (next === undefined) return undefined;
+    return {
+      returned: data.length,
+      note:
+        `This is one page, and more exist. Do NOT read anything as absent because it is not ` +
+        `here — raise \`limit\` (max 200) or follow \`links.next\`.`,
+    };
+  }
+  if (missing <= 0) return undefined;
+  return {
+    returned: data.length,
+    total,
+    missing,
+    note:
+      `This page holds ${data.length} of ${total}; ${missing} did not fit. Do NOT read anything ` +
+      `as absent because it is not here — raise \`limit\` (max 200), narrow the filter, or ` +
+      `follow \`links.next\`.`,
+  };
+};
+
+/**
  * Summarize a full list/single response: flatten each resource in `data` and
  * surface `meta` (totals) and `links.next` (the pagination cursor) when present.
+ *
+ * A partial page also gets an `incomplete` block, because a capped list read as
+ * a complete one is how a present thing gets reported missing.
  */
 export const summarizeResponse = (response: unknown): unknown => {
   if (!isRecord(response) || !("data" in response)) return response;
@@ -63,9 +127,15 @@ export const summarizeResponse = (response: unknown): unknown => {
     ? data.map(summarizeResource)
     : summarizeResource(data);
   const next = isRecord(links) && typeof links.next === "string" ? links.next : undefined;
+  const incomplete = Array.isArray(data) ? incompletePage(data, meta, next) : undefined;
   return {
     data: summarizedData,
+    ...(incomplete !== undefined ? { incomplete } : {}),
     ...(meta !== undefined ? { meta } : {}),
     ...(next !== undefined ? { links: { next } } : {}),
   };
 };
+
+/** Drop undefined values so we never send `{"filter[x]": undefined}` upstream. */
+export const compact = <T extends Record<string, unknown>>(obj: T): Partial<T> =>
+  Object.fromEntries(Object.entries(obj).filter(([, v]) => v !== undefined)) as Partial<T>;

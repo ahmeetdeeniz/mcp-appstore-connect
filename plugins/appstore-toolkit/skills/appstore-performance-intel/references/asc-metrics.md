@@ -33,6 +33,11 @@ specific referrer or campaign token.
 | App Sessions                          | `APP_USAGE`            | how often people open the app and for how long                                      |
 | App Store Pre-Order                   | `COMMERCE`             | pre-orders, only relevant around a launch                                           |
 
+**The delimiter is not fixed.** Analytics segments have been observed both
+comma- and tab-delimited — the same account's engagement segment arrives with
+tabs while the fixtures here use commas — so sniff it from the header rather than
+assuming. `report_stats.py` and `get_analytics_report` both do.
+
 The columns are nearly uniform across all of them, which is what makes
 `report_stats.py group` work the same way on each:
 
@@ -316,19 +321,35 @@ server environment, or a `vendorNumber` key in
 data was unavailable and why — do not quietly substitute analytics downloads for
 sales and call it revenue.
 
-**An empty report arrives as a 404, and it is not an error.** For a period with
-no activity — including dates before the app shipped — Apple answers
-`/v1/salesReports` with **HTTP 404**, `NOT_FOUND`, "There were no sales for the
-date specified". So the tool call fails rather than returning zero rows, and that
-failure is data. Check the app's release date before concluding that downloads
-collapsed.
+**An empty period is a result, not an error.** For a period with no activity —
+including dates before the app shipped — Apple answers `/v1/salesReports` with
+**HTTP 404**, `NOT_FOUND`, "There were no sales for the date specified". Check
+the app's release date before concluding that downloads collapsed.
 
 The trap is that the same 404 is returned for a period Apple has not generated
 yet, and "no sales" and "not computed yet" mean opposite things. Weekly and
 monthly reports are assembled after the dailies, so a just-ended week can 404
-while every day inside it has sales. **Resolve it by dropping a granularity:**
-ask for DAILY reports spanning the same period. Sales in the dailies prove the
-coarser report is a lag artifact and must not be reported as a zero period; empty
-dailies confirm a real zero. On a multi-app vendor account this is quick to check
-— a 404 for a whole account that ships several apps is implausible on its face
-and should be treated as lag until the dailies say otherwise.
+while every day inside it has sales.
+
+**The tool answers this for you.** Rather than failing, `download_sales_report`
+returns `{"empty": true, "reason": …, "confidence": …, "period": …, "evidence": …}`
+and the reason states which case it is:
+
+| reason                   | means                                            | record as        |
+| ------------------------ | ------------------------------------------------ | ---------------- |
+| `NO_ROWS` (proven)       | every sub-period was checked and all were empty  | 0                |
+| `REGION_EMPTY` (finance) | this region was empty, the account was not       | 0 for the region |
+| `NOT_YET_GENERATED`      | a finer period inside this one HAS rows          | not a zero — lag |
+| `WITHIN_GENERATION_LAG`  | the period ended too recently to be assembled    | not a zero — lag |
+| `FUTURE_PERIOD`          | the period has not started                       | not a zero       |
+| `BEYOND_RETENTION`       | older than Apple serves                          | unmeasured       |
+| `NO_ROWS_OBSERVED`       | empty as far as checked, which was not all of it | unmeasured       |
+| `UNDETERMINED`           | nothing was established                          | unmeasured       |
+
+Only `proven` confidence supports writing a zero down. `evidence` says what was
+actually checked; `remedy` says what to do next. Do not re-derive the verdict by
+sweeping the dailies yourself — that is what produced it.
+
+Finance never returns `NO_ROWS` or `NOT_YET_GENERATED`: dating a fiscal report
+that does not exist would need Apple's 4-4-5 calendar modelled, and the server
+deliberately refuses to guess at it.

@@ -101,7 +101,7 @@ export const registerWorkflowTools = (
           maxRating,
           reviews: rows(response),
           nextStep:
-            "Draft responses first; publish only with app_store_connect_respond_to_customer_review and explicit confirm:true.",
+            "Draft responses first; publish only with app_store_connect_reply_to_customer_review and explicit confirm:true.",
         };
       }),
   );

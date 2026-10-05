@@ -10,15 +10,18 @@ import {
   summarizeResponse,
 } from "#/client/shape";
 import {
-  PLATFORMS,
-  PreconditionError,
   appIdArg,
   compact,
   confirmArg,
   limitArg,
+  PLATFORMS,
+  PreconditionError,
+  savePathArg,
   versionIdArg,
   wrap,
+  wrapSaved,
 } from "#/tools/util";
+import { versionOfResponse } from "#/tools/versionshape";
 
 const localizationIdArg = z
   .string()
@@ -27,8 +30,21 @@ const localizationIdArg = z
     "The appStoreVersionLocalization id (from app_store_connect_list_version_localizations).",
   );
 
-/** Apple only accepts a build or attribute change while the version is still editable. */
-const EDITABLE_STATES = ["PREPARE_FOR_SUBMISSION", "DEVELOPER_REJECTED"];
+/**
+ * Apple only accepts a build or attribute change while the version is still editable:
+ * not yet submitted, or back with us after a rejection. That includes a rejection by
+ * App Review (REJECTED, METADATA_REJECTED) and a binary Apple refused (INVALID_BINARY),
+ * not only a submission we withdrew (DEVELOPER_REJECTED) — the web UI swaps the build
+ * on a REJECTED version, and fastlane's editable-version lookup lists the same set.
+ * WAITING_FOR_REVIEW is left out: it is still queued, and has to be cancelled first.
+ */
+const EDITABLE_STATES = [
+  "PREPARE_FOR_SUBMISSION",
+  "DEVELOPER_REJECTED",
+  "REJECTED",
+  "METADATA_REJECTED",
+  "INVALID_BINARY",
+];
 
 /** The one state a manual release request applies to: approved, waiting on us. */
 const RELEASABLE_STATE = "PENDING_DEVELOPER_RELEASE";
@@ -82,7 +98,7 @@ const editableStateProblem = (appStoreState: unknown, change: string): string | 
   }
   return (
     `the version is ${appStoreState}; ${change} can only be changed while it is ` +
-    `${EDITABLE_STATES.join(" or ")}`
+    `${EDITABLE_STATES.slice(0, -1).join(", ")} or ${EDITABLE_STATES.at(-1)}`
   );
 };
 
@@ -207,7 +223,10 @@ export const registerVersionTools = (
       title: "App Store Connect: List Versions",
       description:
         "List an app's App Store versions (each versionString and its review state, e.g. " +
-        "PREPARE_FOR_SUBMISSION, WAITING_FOR_REVIEW, READY_FOR_SALE).",
+        "PREPARE_FOR_SUBMISSION, WAITING_FOR_REVIEW, READY_FOR_SALE). Attributes only: the build " +
+        "each version ships is NOT in this response, so filtering to READY_FOR_SALE here tells " +
+        "you which version is live but nothing about its binary. Pass the versionId to " +
+        "app_store_connect_get_version for that.",
       inputSchema: z.object({
         appId: appIdArg,
         platform: z.enum(PLATFORMS).optional().describe("Filter by platform."),
@@ -217,11 +236,12 @@ export const registerVersionTools = (
           .describe('Filter by review state, e.g. "READY_FOR_SALE".'),
         versionString: z.string().optional().describe('Filter to one version, e.g. "1.2.0".'),
         limit: limitArg,
+        savePath: savePathArg,
       }),
       annotations: { readOnlyHint: true },
     },
-    async ({ appId, platform, appStoreState, versionString, limit }) =>
-      wrap(async () =>
+    async ({ appId, platform, appStoreState, versionString, limit, savePath }) =>
+      wrapSaved(savePath, async () =>
         summarizeResponse(
           await client.get(
             `/v1/apps/${appId}/appStoreVersions`,
@@ -246,32 +266,18 @@ export const registerVersionTools = (
         "returns attributes only, so the build link is invisible there. Use it before submitting: " +
         "a version whose build predates your latest work ships that older binary, and the build's " +
         "uploadedDate is what tells you. `build` is null when nothing is attached yet.",
-      inputSchema: z.object({ versionId: versionIdArg }),
+      inputSchema: z.object({ versionId: versionIdArg, savePath: savePathArg }),
       annotations: { readOnlyHint: true },
     },
-    async ({ versionId }) =>
-      wrap(async () => {
+    async ({ versionId, savePath }) =>
+      wrapSaved(savePath, async () =>
         // The build lives in `relationships` and `included`, both of which
-        // summarizeResponse drops — hence the hand-built shape.
-        const response = await client.get(`/v1/appStoreVersions/${versionId}`, {
-          include: "build",
-        });
-        const version = resourceOf(response);
-        const build = firstIncluded(response, "builds");
-        // Apple can return the relationship without sideloading the resource, so
-        // the id comes from the relationship and the detail from `included`.
-        const buildId = relatedId(version, "build");
-
-        return {
-          id: version.id,
-          ...attributesOf(version),
-          appId: relatedId(version, "app"),
-          build:
-            buildId === undefined
-              ? null
-              : { id: buildId, ...(build === undefined ? {} : attributesOf(build)) },
-        };
-      }),
+        // summarizeResponse drops — hence the hand-built shape, shared with the
+        // portfolio rollup so its three edge cases have one implementation.
+        versionOfResponse(
+          await client.get(`/v1/appStoreVersions/${versionId}`, { include: "build" }),
+        ),
+      ),
   );
 
   server.registerTool(
@@ -281,11 +287,11 @@ export const registerVersionTools = (
       description:
         "List the per-locale metadata rows for one App Store version (each carries description, " +
         "keywords, what's-new, promotional text). Returns the localization ids you update.",
-      inputSchema: z.object({ versionId: versionIdArg, limit: limitArg }),
+      inputSchema: z.object({ versionId: versionIdArg, limit: limitArg, savePath: savePathArg }),
       annotations: { readOnlyHint: true },
     },
-    async ({ versionId, limit }) =>
-      wrap(async () =>
+    async ({ versionId, limit, savePath }) =>
+      wrapSaved(savePath, async () =>
         summarizeResponse(
           await client.get(
             `/v1/appStoreVersions/${versionId}/appStoreVersionLocalizations`,
@@ -301,11 +307,11 @@ export const registerVersionTools = (
       title: "App Store Connect: Get Version Localization",
       description:
         "Get one locale's full App Store metadata (description, keywords, what's-new, …).",
-      inputSchema: z.object({ localizationId: localizationIdArg }),
+      inputSchema: z.object({ localizationId: localizationIdArg, savePath: savePathArg }),
       annotations: { readOnlyHint: true },
     },
-    async ({ localizationId }) =>
-      wrap(async () =>
+    async ({ localizationId, savePath }) =>
+      wrapSaved(savePath, async () =>
         summarizeResponse(await client.get(`/v1/appStoreVersionLocalizations/${localizationId}`)),
       ),
   );
@@ -334,7 +340,9 @@ export const registerVersionTools = (
     },
     async ({ appId, versionString, platform, releaseType, earliestReleaseDate }) =>
       wrap(async () => {
-        assertReleaseFieldsAgree(releaseType, earliestReleaseDate);
+        // Unlike an update, an omitted releaseType here is not "unchanged" but
+        // Apple's AFTER_APPROVAL, which rejects a date just the same.
+        assertReleaseFieldsAgree(releaseType ?? "AFTER_APPROVAL", earliestReleaseDate);
 
         return summarizeResponse(
           await client.post("/v1/appStoreVersions", {
@@ -356,8 +364,9 @@ export const registerVersionTools = (
         "Update an App Store version's own attributes — most usefully releaseType, which decides " +
         "whether an approved version goes live automatically (AFTER_APPROVAL), waits for you to " +
         "release it (MANUAL), or ships at a set time (SCHEDULED). Also renames the version or " +
-        "sets its copyright. Only the fields you pass are changed. The version must still be " +
-        "PREPARE_FOR_SUBMISSION or DEVELOPER_REJECTED. To change a version's build instead, use " +
+        "sets its copyright. Only the fields you pass are changed. The version must not be " +
+        "submitted yet (PREPARE_FOR_SUBMISSION) or must be back after a rejection " +
+        "(DEVELOPER_REJECTED, REJECTED, METADATA_REJECTED, INVALID_BINARY). To change a version's build instead, use " +
         "app_store_connect_set_version_build.",
       inputSchema: z.object({
         versionId: versionIdArg,
@@ -441,7 +450,9 @@ export const registerVersionTools = (
       description:
         "Attach a build to an App Store version — the last step before submitting. Pass detach: " +
         "true instead of a buildId to remove the currently attached build. The version must be " +
-        "PREPARE_FOR_SUBMISSION or DEVELOPER_REJECTED, and the build must be VALID, unexpired, " +
+        "PREPARE_FOR_SUBMISSION or back after a rejection (DEVELOPER_REJECTED, REJECTED, " +
+        "METADATA_REJECTED, INVALID_BINARY) — swapping the build on an App Review rejection " +
+        "and resubmitting works — and the build must be VALID, unexpired, " +
         "and belong to the same app and version string.",
       inputSchema: z.object({
         versionId: versionIdArg,

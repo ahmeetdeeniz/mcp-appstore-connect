@@ -143,9 +143,10 @@ export const resolveConfigPath = (env: NodeJS.ProcessEnv = process.env): string 
 };
 
 /**
- * This file sits next to a path to a private key, so being readable by other
- * users is worth saying out loud. It is a warning and not an error: refusing to
- * start would be a worse trade for someone on a single-user machine.
+ * The config file and the `.p8` it points at: either being readable by other
+ * users is worth saying out loud, and the key most of all — one saved from a
+ * browser download is typically 644. It is a warning and not an error: refusing
+ * to start would be a worse trade for someone on a single-user machine.
  */
 const warnIfGroupReadable = (path: string): void => {
   if (process.platform === "win32") return; // mode bits mean nothing here
@@ -226,11 +227,14 @@ export const resolvePrivateKey = (
   if (source.inline) return source.inline;
   if (source.path) {
     const path = expandTilde(source.path);
+    let key: string;
     try {
-      return readFileSync(path, "utf8");
+      key = readFileSync(path, "utf8");
     } catch (err) {
       throw new Error(`Could not read the private key (${path}): ${message(err)}`, { cause: err });
     }
+    warnIfGroupReadable(path);
+    return key;
   }
   // Deliberately not a throw. A missing key means "unconfigured", which the
   // server reports through app_store_connect_auth_status; exiting here would

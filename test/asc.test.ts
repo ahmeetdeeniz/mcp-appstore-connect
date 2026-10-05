@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 import { AppStoreConnectClient } from "#/client/asc";
 import type { TokenProvider } from "#/client/auth";
 import { AppStoreConnectApiError } from "#/client/errors";
+import { backoffMs } from "#/client/http";
 
 const spyProvider = (): TokenProvider & { invalidate: ReturnType<typeof vi.fn> } => ({
   getToken: async () => "jwt-token",
@@ -324,6 +325,10 @@ describe("AppStoreConnectClient.downloadSignedFile", () => {
     await expect(
       clientWith(fetchImpl).downloadSignedFile("http://asp-us-west-2.s3.amazonaws.com/segments/a"),
     ).rejects.toThrow(/Refusing to download/);
+    // Anyone can register s3-evilamazonaws.com; only a real .amazonaws.com passes.
+    await expect(
+      clientWith(fetchImpl).downloadSignedFile("https://asp-us-west-2.s3-evilamazonaws.com/a"),
+    ).rejects.toThrow(/Refusing to download/);
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 
@@ -336,5 +341,108 @@ describe("AppStoreConnectClient.downloadSignedFile", () => {
     await expect(clientWith(fetchImpl).downloadSignedFile(SEGMENT_URL)).rejects.toThrow(
       /short-lived and expire/,
     );
+  });
+});
+
+describe("AppStoreConnectClient timeouts", () => {
+  /** A connection that never answers, until the request's signal gives up on it. */
+  const stalled = vi.fn(
+    (_url: string, init: RequestInit = {}) =>
+      new Promise<Response>((_resolve, reject) => {
+        init.signal?.addEventListener("abort", () => reject(init.signal?.reason));
+      }),
+  );
+
+  it("fails a stalled request with a clear error, and does not replay it", async () => {
+    stalled.mockClear();
+    const client = new AppStoreConnectClient({
+      tokenProvider: spyProvider(),
+      fetch: stalled as unknown as typeof fetch,
+      timeoutMs: 20,
+    });
+
+    await expect(client.post("/v1/appStoreVersions", { data: {} })).rejects.toThrow(
+      /timed out after 0.02s.*not retried/,
+    );
+    // A POST that may have landed must not be sent twice.
+    expect(stalled).toHaveBeenCalledTimes(1);
+  });
+
+  it("bounds signed downloads with the transfer timeout", async () => {
+    stalled.mockClear();
+    const client = new AppStoreConnectClient({
+      tokenProvider: spyProvider(),
+      fetch: stalled as unknown as typeof fetch,
+      transferTimeoutMs: 20,
+    });
+
+    await expect(
+      client.downloadSignedFile("https://asp-us-west-2.s3.amazonaws.com/segments/abc"),
+    ).rejects.toThrow(/timed out/);
+  });
+});
+
+describe("retry pacing", () => {
+  it("jitters the backoff within half a step of the fixed schedule", () => {
+    expect(backoffMs(0, () => 0)).toBe(500);
+    expect(backoffMs(0, () => 1)).toBe(1000);
+    // Capped at 8s like before, only now spread over 4-8s.
+    expect(backoffMs(10, () => 0)).toBe(4000);
+    expect(backoffMs(10, () => 1)).toBe(8000);
+  });
+
+  it("returns a 429 at once rather than sleeping through a long Retry-After", async () => {
+    const fetchImpl = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ errors: [{ status: "429", detail: "slow down" }] }), {
+          status: 429,
+          headers: { "Retry-After": "3600" },
+        }),
+    );
+    const client = new AppStoreConnectClient({
+      tokenProvider: spyProvider(),
+      fetch: fetchImpl as unknown as typeof fetch,
+    });
+
+    await expect(client.get("/v1/apps")).rejects.toThrow(AppStoreConnectApiError);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("download size caps", () => {
+  const capped = (fetchImpl: ReturnType<typeof vi.fn>): AppStoreConnectClient =>
+    new AppStoreConnectClient({
+      tokenProvider: spyProvider(),
+      fetch: fetchImpl as unknown as typeof fetch,
+      maxDownloadBytes: 1024,
+    });
+
+  /** Small on the wire, large once inflated: the compressed size proves nothing. */
+  it("refuses a report that decompresses past the cap", async () => {
+    const bomb = gzipSync(Buffer.alloc(64 * 1024, "a"));
+    expect(bomb.byteLength).toBeLessThan(1024);
+    const fetchImpl = vi.fn(async () => new Response(bomb, { status: 200 }));
+
+    await expect(capped(fetchImpl).downloadReport("/v1/salesReports", {})).rejects.toThrow(
+      /decompressed report .* hold in memory/,
+    );
+  });
+
+  it("refuses an announced oversized body without reading it", async () => {
+    const fetchImpl = vi.fn(
+      async () =>
+        new Response("x".repeat(10), { status: 200, headers: { "Content-Length": "999999" } }),
+    );
+
+    await expect(
+      capped(fetchImpl).downloadSignedFile("https://asp-us-west-2.s3.amazonaws.com/segments/a"),
+    ).rejects.toThrow(/hold in memory/);
+  });
+
+  it("still reads a report under the cap", async () => {
+    const tsv = "Provider\tUnits\nAPPLE\t3\n";
+    const fetchImpl = vi.fn(async () => new Response(gzipSync(Buffer.from(tsv)), { status: 200 }));
+
+    expect(await capped(fetchImpl).downloadReport("/v1/salesReports", {})).toBe(tsv);
   });
 });

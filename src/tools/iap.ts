@@ -6,6 +6,7 @@ import { z } from "zod";
 import type { AppStoreConnectClient, UploadOperation } from "#/client/asc";
 import {
   attributesOf,
+  type Rec,
   relatedId,
   resourceOf,
   resourcesOf,
@@ -23,14 +24,16 @@ import {
 } from "#/tools/assets";
 import { MANUAL_PRICE_LIMIT, manualPriceNote, manualPriceRows } from "#/tools/pricing";
 import {
-  PreconditionError,
   appIdArg,
   compact,
   confirmArg,
   getOrNull,
   limitArg,
+  PreconditionError,
+  savePathArg,
   territoryArg,
   wrap,
+  wrapSaved,
 } from "#/tools/util";
 
 const IAP_TYPES = ["CONSUMABLE", "NON_CONSUMABLE", "NON_RENEWING_SUBSCRIPTION"] as const;
@@ -124,11 +127,12 @@ export const registerIapTools = (
           .optional()
           .describe('Filter by review state, e.g. "APPROVED", "READY_TO_SUBMIT".'),
         limit: limitArg,
+        savePath: savePathArg,
       }),
       annotations: { readOnlyHint: true },
     },
-    async ({ appId, productId, name, inAppPurchaseType, state, limit }) =>
-      wrap(async () =>
+    async ({ appId, productId, name, inAppPurchaseType, state, limit, savePath }) =>
+      wrapSaved(savePath, async () =>
         summarizeResponse(
           await client.get(
             `/v1/apps/${appId}/inAppPurchasesV2`,
@@ -149,11 +153,11 @@ export const registerIapTools = (
     {
       title: "App Store Connect: Get In-App Purchase",
       description: "Get one in-app purchase's attributes by its resource id.",
-      inputSchema: z.object({ inAppPurchaseId: inAppPurchaseIdArg }),
+      inputSchema: z.object({ inAppPurchaseId: inAppPurchaseIdArg, savePath: savePathArg }),
       annotations: { readOnlyHint: true },
     },
-    async ({ inAppPurchaseId }) =>
-      wrap(async () =>
+    async ({ inAppPurchaseId, savePath }) =>
+      wrapSaved(savePath, async () =>
         summarizeResponse(await client.get(`/v2/inAppPurchases/${inAppPurchaseId}`)),
       ),
   );
@@ -172,11 +176,12 @@ export const registerIapTools = (
         inAppPurchaseId: inAppPurchaseIdArg,
         territory: territoryArg,
         limit: limitArg,
+        savePath: savePathArg,
       }),
       annotations: { readOnlyHint: true },
     },
-    async ({ inAppPurchaseId, territory, limit }) =>
-      wrap(async () =>
+    async ({ inAppPurchaseId, territory, limit, savePath }) =>
+      wrapSaved(savePath, async () =>
         summarizeResponse(
           await client.get(`/v2/inAppPurchases/${inAppPurchaseId}/pricePoints`, {
             "filter[territory]": territory,
@@ -194,11 +199,11 @@ export const registerIapTools = (
         "Show what an in-app purchase currently costs: its base territory and every manual price " +
         "in force, each with its territory, its customerPrice and proceeds, and its start/end " +
         "date. An empty price list means the IAP has never been priced.",
-      inputSchema: z.object({ inAppPurchaseId: inAppPurchaseIdArg }),
+      inputSchema: z.object({ inAppPurchaseId: inAppPurchaseIdArg, savePath: savePathArg }),
       annotations: { readOnlyHint: true },
     },
-    async ({ inAppPurchaseId }) =>
-      wrap(async () => {
+    async ({ inAppPurchaseId, savePath }) =>
+      wrapSaved(savePath, async () => {
         // Two calls, not one include: the schedule endpoint rejects a nested
         // `manualPrices.inAppPurchasePricePoint` with an HTTP 400, and only the
         // manualPrices endpoint can sideload the price point. See manualPriceRows.
@@ -239,11 +244,15 @@ export const registerIapTools = (
         "the localization ids the update and delete tools take. An IAP stuck at " +
         "`MISSING_METADATA` is usually missing these: Apple requires a display name, a " +
         "description and a review screenshot before it can be submitted.",
-      inputSchema: z.object({ inAppPurchaseId: inAppPurchaseIdArg, limit: limitArg }),
+      inputSchema: z.object({
+        inAppPurchaseId: inAppPurchaseIdArg,
+        limit: limitArg,
+        savePath: savePathArg,
+      }),
       annotations: { readOnlyHint: true },
     },
-    async ({ inAppPurchaseId, limit }) =>
-      wrap(async () =>
+    async ({ inAppPurchaseId, limit, savePath }) =>
+      wrapSaved(savePath, async () =>
         summarizeResponse(
           await client.get(
             `/v2/inAppPurchases/${inAppPurchaseId}/inAppPurchaseLocalizations`,
@@ -262,11 +271,11 @@ export const registerIapTools = (
         "`assetDeliveryState` — the way to check whether an upload finished processing, and the " +
         "third thing Apple requires before an IAP leaves `MISSING_METADATA`. Returns nothing when " +
         "no screenshot has been attached.",
-      inputSchema: z.object({ inAppPurchaseId: inAppPurchaseIdArg }),
+      inputSchema: z.object({ inAppPurchaseId: inAppPurchaseIdArg, savePath: savePathArg }),
       annotations: { readOnlyHint: true },
     },
-    async ({ inAppPurchaseId }) =>
-      wrap(async () =>
+    async ({ inAppPurchaseId, savePath }) =>
+      wrapSaved(savePath, async () =>
         summarizeResponse(
           await client.get(`/v2/inAppPurchases/${inAppPurchaseId}/appStoreReviewScreenshot`),
         ),
@@ -283,11 +292,15 @@ export const registerIapTools = (
         "easiest to miss: a name, a description, a price and a review screenshot can all be in " +
         "place and the IAP still will not become READY_TO_SUBMIT without it. `data: null` means " +
         "availability has never been set — use app_store_connect_set_iap_availability.",
-      inputSchema: z.object({ inAppPurchaseId: inAppPurchaseIdArg, limit: limitArg }),
+      inputSchema: z.object({
+        inAppPurchaseId: inAppPurchaseIdArg,
+        limit: limitArg,
+        savePath: savePathArg,
+      }),
       annotations: { readOnlyHint: true },
     },
-    async ({ inAppPurchaseId, limit }) =>
-      wrap(async () => {
+    async ({ inAppPurchaseId, limit, savePath }) =>
+      wrapSaved(savePath, async () => {
         const response = await getOrNull(
           client,
           `/v2/inAppPurchases/${inAppPurchaseId}/inAppPurchaseAvailability`,
@@ -434,7 +447,8 @@ export const registerIapTools = (
           ),
         confirm: confirmArg,
       }),
-      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
+      // Replaces the territory list, so it can withdraw the IAP from a storefront.
+      annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false },
     },
     async ({ inAppPurchaseId, territories, availableInNewTerritories }) =>
       wrap(async () => {
@@ -442,7 +456,9 @@ export const registerIapTools = (
         // and there is no wildcard, so an omitted list means read the catalogue.
         const resolved =
           territories ??
-          resourcesOf(await client.get("/v1/territories", { limit: 200 })).flatMap((t) =>
+          // Every page: ~175 fit in one today, and a catalogue that outgrew it
+          // would otherwise make "everywhere" silently mean "most places".
+          (await client.getAll<Rec>("/v1/territories", { limit: 200 })).data.flatMap((t) =>
             typeof t.id === "string" ? [t.id] : [],
           );
 
@@ -727,9 +743,34 @@ export const registerIapTools = (
           failureHint:
             "A review screenshot must be a screenshot of the purchase inside your app, at a " +
             "supported device resolution and with no alpha channel.",
-          deleteToolName: "app_store_connect_get_iap_review_screenshot (then delete it in the UI)",
+          deleteToolName: "app_store_connect_delete_iap_review_screenshot",
           pollToolName: "app_store_connect_get_iap_review_screenshot",
         });
+      }),
+  );
+
+  server.registerTool(
+    "app_store_connect_delete_iap_review_screenshot",
+    {
+      title: "App Store Connect: Delete IAP Review Screenshot",
+      description:
+        "Remove the review screenshot attached to an in-app purchase — the way to clear one App " +
+        "Store Connect rejected during processing, or a wrong image, before uploading another. " +
+        "Takes the inAppPurchase id and looks the screenshot up itself. Deleting it puts the IAP " +
+        "back into `MISSING_METADATA` until a new one is uploaded.",
+      inputSchema: z.object({ inAppPurchaseId: inAppPurchaseIdArg, confirm: confirmArg }),
+      annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true },
+    },
+    async ({ inAppPurchaseId }) =>
+      wrap(async () => {
+        const screenshotId = idOf(
+          await getOrNull(client, `/v2/inAppPurchases/${inAppPurchaseId}/appStoreReviewScreenshot`),
+        );
+        if (!screenshotId) {
+          return { deleted: null, inAppPurchaseId, note: "No review screenshot was attached." };
+        }
+        await client.del(`/v1/inAppPurchaseAppStoreReviewScreenshots/${screenshotId}`);
+        return { deleted: screenshotId, inAppPurchaseId };
       }),
   );
 

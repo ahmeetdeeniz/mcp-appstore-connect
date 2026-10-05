@@ -1,9 +1,20 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 
-import type { AppStoreConnectClient } from "../client/asc.js";
-import { attributesOf, resourcesOf, summarizeResponse } from "../client/shape.js";
-import { appIdArg, compact, confirmArg, limitArg, PreconditionError, wrap } from "./util.js";
+import type { AppStoreConnectClient } from "#/client/asc";
+import { attributesOf, resourcesOf, summarizeResponse } from "#/client/shape";
+import {
+  appIdArg,
+  appIdsArg,
+  compact,
+  confirmArg,
+  limitArg,
+  PreconditionError,
+  savePathArg,
+  summarizeWithApp,
+  wrap,
+  wrapSaved,
+} from "#/tools/util";
 
 const groupIdArg = z
   .string()
@@ -42,14 +53,21 @@ export const registerTestflightTools = (
     {
       description:
         "List an app's TestFlight beta groups (internal and external), with their public-link " +
-        "state. Returns the group ids used to manage testers and distribute builds.",
-      inputSchema: { appId: appIdArg, limit: limitArg },
+        "state. Returns the group ids used to manage testers.",
+      inputSchema: { appId: appIdsArg, limit: limitArg, savePath: savePathArg },
       annotations: { readOnlyHint: true },
     },
-    async ({ appId, limit }) =>
-      wrap(async () =>
-        summarizeResponse(
-          await client.get("/v1/betaGroups", compact({ "filter[app]": appId, limit })),
+    async ({ appId, limit, savePath }) =>
+      wrapSaved(savePath, async () =>
+        summarizeWithApp(
+          await client.get(
+            "/v1/betaGroups",
+            // include=app is what puts `data` on the app relationship; without
+            // it several apps' groups are indistinguishable.
+            compact({ "filter[app]": appId, include: "app", limit }),
+          ),
+          limit,
+          appId,
         ),
       ),
   );
@@ -64,11 +82,12 @@ export const registerTestflightTools = (
         groupId: z.string().optional().describe("Only testers in this beta group."),
         email: z.string().optional().describe("Filter by tester email."),
         limit: limitArg,
+        savePath: savePathArg,
       },
       annotations: { readOnlyHint: true },
     },
-    async ({ groupId, email, limit }) =>
-      wrap(async () =>
+    async ({ groupId, email, limit, savePath }) =>
+      wrapSaved(savePath, async () =>
         summarizeResponse(
           groupId
             ? await client.get(`/v1/betaGroups/${groupId}/betaTesters`, compact({ limit }))
@@ -83,11 +102,11 @@ export const registerTestflightTools = (
       description:
         "List TestFlight beta feedback screenshot submissions for an app (tester comment, device " +
         "model, OS version, and screenshot asset links).",
-      inputSchema: { appId: appIdArg, limit: limitArg },
+      inputSchema: { appId: appIdArg, limit: limitArg, savePath: savePathArg },
       annotations: { readOnlyHint: true },
     },
-    async ({ appId, limit }) =>
-      wrap(async () =>
+    async ({ appId, limit, savePath }) =>
+      wrapSaved(savePath, async () =>
         summarizeResponse(
           await client.get(
             `/v1/apps/${appId}/betaFeedbackScreenshotSubmissions`,

@@ -7,9 +7,9 @@ import {
   flattenAssociatedErrors,
   formatAssociatedError,
 } from "#/client/errors";
+import { buildQuery, safeJsonParse, withRetry, type Query } from "#/client/http";
 
-export type QueryValue = string | number | boolean | string[] | undefined;
-export type Query = Record<string, QueryValue>;
+export type { Query, QueryValue } from "#/client/http";
 
 export type RequestOptions = {
   query?: Query;
@@ -23,87 +23,21 @@ export type AscClientOptions = {
   fetch?: typeof fetch;
   logger?: Logger;
   userAgent?: string;
+  /** Per-attempt timeout for API calls. Defaults to 60s. */
+  timeoutMs?: number;
+  /** Per-attempt timeout for asset uploads and report downloads. Defaults to 5 minutes. */
+  transferTimeoutMs?: number;
+  /**
+   * Largest report this client will hold in memory, compressed or not. Defaults
+   * to 256 MiB, comfortably under the ~512 MiB a single string can reach.
+   */
+  maxDownloadBytes?: number;
 };
 
 const DEFAULT_BASE_URL = "https://api.appstoreconnect.apple.com";
 
-const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
-
-const backoffMs = (attempt: number): number => Math.min(1000 * 2 ** attempt, 8000);
-
-const retryAfterMs = (res: Response): number | undefined => {
-  const header = res.headers.get("Retry-After");
-  if (header === null) return undefined;
-  const seconds = Number(header);
-  return Number.isFinite(seconds) ? Math.max(seconds, 0) * 1000 : undefined;
-};
-
-const safeJsonParse = (text: string): unknown => {
-  try {
-    return text ? JSON.parse(text) : undefined;
-  } catch {
-    return text;
-  }
-};
-
-/**
- * App Store Connect takes bracketed sparse-fieldset and filter params
- * (`fields[apps]=name,bundleId`, `filter[bundleId]=com.acme`). Array values are
- * joined with commas — that's the JSON:API convention Apple expects, NOT
- * repeated keys. The bracketed keys pass through URLSearchParams literally.
- */
-const buildQuery = (query: Query | undefined): string => {
-  if (!query) return "";
-  const params = new URLSearchParams();
-  for (const [key, value] of Object.entries(query)) {
-    if (value === undefined) continue;
-    params.append(key, Array.isArray(value) ? value.join(",") : String(value));
-  }
-  const qs = params.toString();
-  return qs ? `?${qs}` : "";
-};
-
-type RetryPolicy = {
-  maxRetries: number;
-  /** Prefix for the debug/warn lines, e.g. `GET https://…` or `PUT asset part 1/2`. */
-  label: string;
-  logger?: Logger | undefined;
-  /**
-   * Invoked before retrying a 401. Omitted for Apple's pre-signed upload URLs,
-   * where a 401/403 means the URL expired and reminting the JWT cannot help.
-   */
-  onUnauthorized?: (() => void) | undefined;
-};
-
-/** Run `perform` until it yields a non-retryable response or the budget runs out. */
-const withRetry = async (
-  perform: () => Promise<Response>,
-  policy: RetryPolicy,
-): Promise<Response> => {
-  let attempt = 0;
-
-  for (;;) {
-    policy.logger?.debug?.(`[appstore-connect] ${policy.label} (attempt ${attempt + 1})`);
-    const res = await perform();
-
-    if (res.status === 401 && policy.onUnauthorized && attempt < policy.maxRetries) {
-      policy.logger?.warn?.(`[appstore-connect] HTTP 401 — reminting token and retrying`);
-      policy.onUnauthorized();
-      attempt += 1;
-      continue;
-    }
-
-    if ((res.status === 429 || res.status >= 500) && attempt < policy.maxRetries) {
-      const delay = retryAfterMs(res) ?? backoffMs(attempt);
-      policy.logger?.warn?.(`[appstore-connect] HTTP ${res.status} — retrying in ${delay}ms`);
-      await sleep(delay);
-      attempt += 1;
-      continue;
-    }
-
-    return res;
-  }
-};
+/** Log prefix for this client's retry lines. */
+const TAG = "[appstore-connect]";
 
 /**
  * Analytics report segments are served from a blob store rather than the API
@@ -119,8 +53,10 @@ const withRetry = async (
 const DOWNLOAD_HOSTS = [
   /(^|\.)apple\.com$/,
   // e.g. asp-us-west-2.s3.amazonaws.com, and the s3-<region> spelling.
-  /^asp-[a-z0-9-]+\.s3[.-][a-z0-9.-]*amazonaws\.com$/,
+  /^asp-[a-z0-9-]+\.s3([.-][a-z0-9-]+)*\.amazonaws\.com$/,
 ];
+
+const mib = (bytes: number): string => `${Math.round(bytes / 1024 / 1024)} MiB`;
 
 const isGzip = (buf: Buffer): boolean => buf.length > 2 && buf[0] === 0x1f && buf[1] === 0x8b;
 
@@ -157,6 +93,9 @@ export class AppStoreConnectClient {
   private readonly fetchImpl: typeof fetch;
   private readonly logger: Logger | undefined;
   private readonly userAgent: string;
+  private readonly timeoutMs: number;
+  private readonly transferTimeoutMs: number;
+  private readonly maxDownloadBytes: number;
 
   constructor(opts: AscClientOptions) {
     this.baseUrl = (opts.baseUrl ?? DEFAULT_BASE_URL).replace(/\/+$/, "");
@@ -165,6 +104,9 @@ export class AppStoreConnectClient {
     this.fetchImpl = opts.fetch ?? fetch;
     this.logger = opts.logger;
     this.userAgent = opts.userAgent ?? "mcp-appstore-connect-js";
+    this.timeoutMs = opts.timeoutMs ?? 60_000;
+    this.transferTimeoutMs = opts.transferTimeoutMs ?? 300_000;
+    this.maxDownloadBytes = opts.maxDownloadBytes ?? 256 * 1024 * 1024;
   }
 
   /** Issue a request, returning the raw `Response` after the retry loop. */
@@ -178,10 +120,11 @@ export class AppStoreConnectClient {
     const hasBody = opts.body !== undefined;
 
     return withRetry(
-      async () => {
+      async (signal) => {
         const token = await this.tokenProvider.getToken();
         return this.fetchImpl(url, {
           method,
+          signal,
           headers: {
             Accept: accept,
             Authorization: `Bearer ${token}`,
@@ -194,8 +137,11 @@ export class AppStoreConnectClient {
       {
         maxRetries: this.maxRetries,
         label: `${method} ${url}`,
+        tag: TAG,
         logger: this.logger,
         onUnauthorized: () => this.tokenProvider.invalidate(),
+        // A gzipped report is a transfer, not an API reply, and can take a while.
+        timeoutMs: accept === "application/json" ? this.timeoutMs : this.transferTimeoutMs,
       },
     );
   }
@@ -246,8 +192,15 @@ export class AppStoreConnectClient {
 
       const url = op.url;
       const res = await withRetry(
-        () => this.fetchImpl(url, { method: op.method ?? "PUT", headers, body: chunk }),
-        { maxRetries: this.maxRetries, label: `PUT asset ${part}`, logger: this.logger },
+        (signal) =>
+          this.fetchImpl(url, { method: op.method ?? "PUT", headers, body: chunk, signal }),
+        {
+          maxRetries: this.maxRetries,
+          label: `PUT asset ${part}`,
+          tag: TAG,
+          logger: this.logger,
+          timeoutMs: this.transferTimeoutMs,
+        },
       );
 
       if (!res.ok) {
@@ -284,7 +237,7 @@ export class AppStoreConnectClient {
    */
   async downloadReport(path: string, query: Query): Promise<string> {
     const res = await this.fetchWithRetry("GET", path, { query }, "application/a-gzip");
-    const buf = Buffer.from(await res.arrayBuffer());
+    const buf = await this.readCapped(res, path);
 
     if (!res.ok) {
       const text = buf.toString("utf8");
@@ -293,7 +246,7 @@ export class AppStoreConnectClient {
         errors: this.parseErrors(text),
       });
     }
-    return gunzipSync(buf).toString("utf8");
+    return this.gunzipCapped(buf, path);
   }
 
   /**
@@ -328,14 +281,17 @@ export class AppStoreConnectClient {
     }
 
     const res = await withRetry(
-      () => this.fetchImpl(url, { method: "GET", headers: { "User-Agent": this.userAgent } }),
+      (signal) =>
+        this.fetchImpl(url, { method: "GET", headers: { "User-Agent": this.userAgent }, signal }),
       {
         maxRetries: this.maxRetries,
         label: `GET ${parsed.origin}${parsed.pathname}`,
+        tag: TAG,
         logger: this.logger,
+        timeoutMs: this.transferTimeoutMs,
       },
     );
-    const buf = Buffer.from(await res.arrayBuffer());
+    const buf = await this.readCapped(res, parsed.pathname);
 
     if (!res.ok) {
       const text = buf.toString("utf8").slice(0, 500);
@@ -346,7 +302,40 @@ export class AppStoreConnectClient {
         { status: res.status, errors: text },
       );
     }
-    return isGzip(buf) ? gunzipSync(buf).toString("utf8") : buf.toString("utf8");
+    return isGzip(buf) ? this.gunzipCapped(buf, parsed.pathname) : buf.toString("utf8");
+  }
+
+  private tooLarge(what: string, bytes: number | undefined): Error {
+    return new Error(
+      `${what} is ${bytes === undefined ? "larger than" : `${mib(bytes)}, over`} the ` +
+        `${mib(this.maxDownloadBytes)} this server will hold in memory. Narrow the request — a ` +
+        `shorter period, a SUMMARY rather than DETAILED report, or a single region.`,
+    );
+  }
+
+  /** Refuse a body Apple announces as oversized before reading any of it. */
+  private async readCapped(res: Response, path: string): Promise<Buffer> {
+    const announced = Number(res.headers.get("Content-Length"));
+    if (Number.isFinite(announced) && announced > this.maxDownloadBytes) {
+      await res.body?.cancel();
+      throw this.tooLarge(`The download from ${path}`, announced);
+    }
+    return Buffer.from(await res.arrayBuffer());
+  }
+
+  /**
+   * A gzipped TSV of repetitive rows compresses 10-50x, so the compressed size
+   * says little about what decompression will allocate. Cap the output itself.
+   */
+  private gunzipCapped(buf: Buffer, path: string): string {
+    try {
+      return gunzipSync(buf, { maxOutputLength: this.maxDownloadBytes }).toString("utf8");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ERR_BUFFER_TOO_LARGE") {
+        throw this.tooLarge(`The decompressed report from ${path}`, undefined);
+      }
+      throw error;
+    }
   }
 
   private parseErrors(text: string): AppStoreConnectError[] | unknown {
