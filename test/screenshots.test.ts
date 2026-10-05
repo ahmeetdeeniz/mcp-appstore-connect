@@ -1,5 +1,7 @@
 import { createHash } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, truncateSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
@@ -279,6 +281,29 @@ describe("app_store_connect_upload_screenshot", () => {
     expect(payload.note).toContain("app_store_connect_get_screenshot");
   });
 
+  it("treats a failed status read after commit as success, not an error", async () => {
+    const routed = router({
+      existingSets: [{ id: "set-67", screenshotDisplayType: "APP_IPHONE_67" }],
+    });
+    const fetchImpl = vi.fn(async (url: string, init: RequestInit = {}) =>
+      (init.method ?? "GET") === "GET" && url.includes("/v1/appScreenshots/")
+        ? jsonResponse({ errors: [{ status: "403", detail: "flaky" }] }, 403)
+        : (routed as unknown as typeof fetch)(url, init),
+    );
+    const client = await connect(fetchImpl as unknown as typeof fetch);
+
+    const result = await upload(client, { waitSeconds: 30 });
+
+    expect(result.isError).toBeFalsy();
+    const payload = JSON.parse(textOf(result));
+    expect(payload.stillProcessing).toBe(true);
+    expect(payload.state).toBe("UNKNOWN");
+    expect(payload.note).toContain("Do not re-upload");
+    expect(payload.note).toContain("app_store_connect_get_screenshot");
+    // A committed upload leaves its asset in place.
+    expect(calls(fetchImpl).some(([, init]) => init.method === "DELETE")).toBe(false);
+  });
+
   it("retries a 5xx on the upload URL without reserving a second screenshot", async () => {
     const fetchImpl = router({
       existingSets: [{ id: "set-67", screenshotDisplayType: "APP_IPHONE_67" }],
@@ -341,6 +366,23 @@ describe("app_store_connect_upload_screenshot", () => {
     expect(text).toContain("/nope/missing.png");
     expect(text).toContain("Docker");
     expect(text).toContain("fileData");
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("refuses an oversized file with the size, not the unreadable-path message", async () => {
+    // Sparse, so an 11 MiB file costs nothing to create.
+    const path = join(mkdtempSync(join(tmpdir(), "asc-shot-")), "huge.png");
+    writeFileSync(path, "");
+    truncateSync(path, 11 * 1024 * 1024);
+    const fetchImpl = router();
+    const client = await connect(fetchImpl as unknown as typeof fetch);
+
+    const result = await upload(client, { filePath: path });
+
+    expect(result.isError).toBe(true);
+    expect(textOf(result)).toContain("over the");
+    // A size problem, not the Docker-path explanation for an unreadable file.
+    expect(textOf(result)).not.toContain("Could not read");
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 

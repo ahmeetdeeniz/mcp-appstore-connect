@@ -1,12 +1,18 @@
-import { mkdir, writeFile } from "node:fs/promises";
-import { dirname } from "node:path";
-
 import type { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
 
 import type { AppStoreConnectClient } from "#/client/asc";
 import { attributesOf, isRecord, resourceOf, summarizeResponse } from "#/client/shape";
-import { compact, confirmArg, limitArg, wrap } from "#/tools/util";
+import {
+  compact,
+  confirmArg,
+  limitArg,
+  type SavedFile,
+  savePathArg,
+  saveToPath,
+  wrap,
+  wrapSaved,
+} from "#/tools/util";
 
 /**
  * Apple's `CertificateType` is a moving target — DEVELOPER_ID_APPLICATION_G2 and
@@ -26,7 +32,7 @@ const certificateTypeArg = z
       "IOS_DISTRIBUTION, PASS_TYPE_ID.",
   );
 
-const savePathArg = z
+const certSavePathArg = z
   .string()
   .optional()
   .describe(
@@ -35,14 +41,19 @@ const savePathArg = z
       "the keychain. Parent directories are created.",
   );
 
-/** Decode Apple's base64 DER and write a double-clickable .cer. */
-const saveCertificate = async (content: unknown, path: string): Promise<string> => {
+/**
+ * Decode Apple's base64 DER and write a double-clickable .cer.
+ *
+ * Goes through the shared writer, so this path gets the absolute-path rule and
+ * the Docker-mount remedy it used to lack — a relative path here silently wrote
+ * the certificate somewhere the caller could not find.
+ */
+const saveCertificate = async (content: unknown, path: string): Promise<SavedFile> => {
   if (typeof content !== "string" || content.length === 0) {
     throw new Error("Apple returned no certificateContent to save.");
   }
-  await mkdir(dirname(path), { recursive: true });
-  await writeFile(path, Buffer.from(content, "base64"));
-  return path;
+  const written = await saveToPath(path, Buffer.from(content, "base64"), "certificate");
+  return { ...written, content: "binary" };
 };
 
 /**
@@ -86,11 +97,12 @@ export const registerCertificateTools = (
         certificateType: certificateTypeArg.optional(),
         displayName: z.string().optional().describe("Filter by display name (exact match)."),
         limit: limitArg,
+        savePath: savePathArg,
       }),
       annotations: { readOnlyHint: true },
     },
-    async ({ certificateType, displayName, limit }) =>
-      wrap(async () =>
+    async ({ certificateType, displayName, limit, savePath }) =>
+      wrapSaved(savePath, async () =>
         withoutBlobs(
           summarizeResponse(
             await client.get(
@@ -125,9 +137,11 @@ export const registerCertificateTools = (
       wrap(async () => {
         const response = await client.get(`/v1/certificates/${certificateId}`);
         const attributes = attributesOf(resourceOf(response));
-        const written = await saveCertificate(attributes.certificateContent, savePath);
+        const saved = await saveCertificate(attributes.certificateContent, savePath);
         return {
-          savedTo: written,
+          saved,
+          // Deprecated alias for `saved.path`, removed in 0.24.
+          savedTo: saved.path,
           certificateType: attributes.certificateType,
           name: attributes.name,
           expirationDate: attributes.expirationDate,
@@ -162,7 +176,7 @@ export const registerCertificateTools = (
           .describe(
             "The full PEM text of the .csr, including the BEGIN/END CERTIFICATE REQUEST lines.",
           ),
-        savePath: savePathArg,
+        savePath: certSavePathArg,
       }),
       annotations: { readOnlyHint: false, destructiveHint: false },
     },
@@ -172,7 +186,7 @@ export const registerCertificateTools = (
           data: { type: "certificates", attributes: { certificateType, csrContent } },
         });
         const attributes = attributesOf(resourceOf(response));
-        const savedTo = savePath
+        const saved = savePath
           ? await saveCertificate(attributes.certificateContent, savePath)
           : undefined;
         return compact({
@@ -181,9 +195,13 @@ export const registerCertificateTools = (
           name: attributes.name,
           serialNumber: attributes.serialNumber,
           expirationDate: attributes.expirationDate,
-          savedTo,
-          nextStep: savedTo
-            ? `Double-click ${savedTo} to import it, then check: security find-identity -v -p codesigning`
+          saved,
+          // Deprecated alias for `saved.path`, removed in 0.24. Losing it fails
+          // loudly — a caller reading it gets undefined and says so — so unlike
+          // `truncated` it does not need to be kept.
+          savedTo: saved?.path,
+          nextStep: saved
+            ? `Double-click ${saved.path} to import it, then check: security find-identity -v -p codesigning`
             : "Pass savePath to write the .cer, or fetch it later with download_certificate.",
         });
       }),

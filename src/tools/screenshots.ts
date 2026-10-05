@@ -5,8 +5,15 @@ import { z } from "zod";
 
 import type { AppStoreConnectClient, UploadOperation } from "#/client/asc";
 import { summarizeResponse } from "#/client/shape";
-import { attributesOf, idOf, isRecord, pollAssetState, readImage } from "#/tools/assets";
-import { compact, confirmArg, limitArg, wrap } from "#/tools/util";
+import {
+  attributesOf,
+  idOf,
+  isRecord,
+  pollAssetState,
+  readImage,
+  stripUploadOperations,
+} from "#/tools/assets";
+import { compact, confirmArg, limitArg, savePathArg, wrap, wrapSaved } from "#/tools/util";
 
 /**
  * Apple's ScreenshotDisplayType enum (spec 3.2). Hardcoded rather than accepted
@@ -73,22 +80,6 @@ const displayTypeArg = z
       'APP_IPHONE_67 (6.7" — 1290x2796) and APP_IPAD_PRO_3GEN_129 (12.9" — 2048x2732). ' +
       "APP_DESKTOP is macOS.",
   );
-
-/**
- * `uploadOperations` is a plain attribute, so the generic summarizer would echo
- * a wall of long pre-signed URLs back into the model's context. They are spent
- * by the time anyone reads a screenshot, so drop them.
- */
-const stripUploadOperations = (summarized: unknown): unknown => {
-  if (!isRecord(summarized) || !("data" in summarized)) return summarized;
-  const strip = (row: unknown): unknown => {
-    if (!isRecord(row)) return row;
-    const { uploadOperations: _dropped, ...rest } = row;
-    return rest;
-  };
-  const { data } = summarized;
-  return { ...summarized, data: Array.isArray(data) ? data.map(strip) : strip(data) };
-};
 
 /** Find the existing set for a display type, so uploads don't need a lookup first. */
 const findScreenshotSet = async (
@@ -226,11 +217,15 @@ export const registerScreenshotTools = (
       description:
         "List the screenshot sets of one App Store version localization — one set per device " +
         "type (screenshotDisplayType). Returns the set ids you upload into or reorder.",
-      inputSchema: z.object({ localizationId: localizationIdArg, limit: limitArg }),
+      inputSchema: z.object({
+        localizationId: localizationIdArg,
+        limit: limitArg,
+        savePath: savePathArg,
+      }),
       annotations: { readOnlyHint: true },
     },
-    async ({ localizationId, limit }) =>
-      wrap(async () =>
+    async ({ localizationId, limit, savePath }) =>
+      wrapSaved(savePath, async () =>
         summarizeResponse(
           await client.get(
             `/v1/appStoreVersionLocalizations/${localizationId}/appScreenshotSets`,
@@ -247,11 +242,15 @@ export const registerScreenshotTools = (
       description:
         "List the screenshots in one set, in display order, with each file name, upload state " +
         "and image dimensions. Use it to audit what a device type currently shows on the store.",
-      inputSchema: z.object({ screenshotSetId: screenshotSetIdArg, limit: limitArg }),
+      inputSchema: z.object({
+        screenshotSetId: screenshotSetIdArg,
+        limit: limitArg,
+        savePath: savePathArg,
+      }),
       annotations: { readOnlyHint: true },
     },
-    async ({ screenshotSetId, limit }) =>
-      wrap(async () =>
+    async ({ screenshotSetId, limit, savePath }) =>
+      wrapSaved(savePath, async () =>
         stripUploadOperations(
           summarizeResponse(
             await client.get(
@@ -270,11 +269,11 @@ export const registerScreenshotTools = (
       description:
         "Get one screenshot, including its assetDeliveryState — the way to check whether App " +
         "Store Connect finished processing an upload that was still in progress.",
-      inputSchema: z.object({ screenshotId: screenshotIdArg }),
+      inputSchema: z.object({ screenshotId: screenshotIdArg, savePath: savePathArg }),
       annotations: { readOnlyHint: true },
     },
-    async ({ screenshotId }) =>
-      wrap(async () =>
+    async ({ screenshotId, savePath }) =>
+      wrapSaved(savePath, async () =>
         stripUploadOperations(
           summarizeResponse(await client.get(`/v1/appScreenshots/${screenshotId}`)),
         ),
@@ -292,7 +291,8 @@ export const registerScreenshotTools = (
         "flow: finds or creates the set for the device type, reserves the asset, uploads the " +
         "bytes, commits the checksum, then waits for processing. App Store Connect validates " +
         "image dimensions during processing, so a wrongly-sized image fails here with the exact " +
-        "reason. The version must be editable (PREPARE_FOR_SUBMISSION or DEVELOPER_REJECTED), " +
+        "reason. The version must be editable (PREPARE_FOR_SUBMISSION, or DEVELOPER_REJECTED, " +
+        "REJECTED, METADATA_REJECTED or INVALID_BINARY after a rejection), " +
         "and a set holds at most 10 screenshots.",
       inputSchema: z.object({
         localizationId: localizationIdArg,

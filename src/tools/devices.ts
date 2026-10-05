@@ -3,7 +3,7 @@ import { z } from "zod";
 
 import type { AppStoreConnectClient } from "#/client/asc";
 import { summarizeResponse } from "#/client/shape";
-import { compact, limitArg, wrap } from "#/tools/util";
+import { compact, confirmArg, limitArg, savePathArg, wrap, wrapSaved } from "#/tools/util";
 
 export const registerDeviceTools = (
   server: McpServer,
@@ -21,11 +21,12 @@ export const registerDeviceTools = (
         status: z.enum(["ENABLED", "DISABLED"]).optional().describe("Filter by device status."),
         platform: z.enum(["IOS", "MAC_OS"]).optional().describe("Filter by platform."),
         limit: limitArg,
+        savePath: savePathArg,
       }),
       annotations: { readOnlyHint: true },
     },
-    async ({ status, platform, limit }) =>
-      wrap(async () =>
+    async ({ status, platform, limit, savePath }) =>
+      wrapSaved(savePath, async () =>
         summarizeResponse(
           await client.get(
             "/v1/devices",
@@ -48,6 +49,9 @@ export const registerDeviceTools = (
         name: z.string().min(1).describe("A label for the device."),
         udid: z.string().min(1).describe("The device UDID (40-char hex, or newer 25-char form)."),
         platform: z.enum(["IOS", "MAC_OS"]).default("IOS"),
+        // Not undoable, and each registration spends one of the account's
+        // yearly per-platform device slots even after it is disabled.
+        confirm: confirmArg,
       }),
       annotations: { readOnlyHint: false, destructiveHint: false },
     },

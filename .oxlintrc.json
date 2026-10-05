@@ -5,5 +5,13 @@
     "suspicious": "warn"
   },
   "rules": {},
-  "ignorePatterns": ["dist", "node_modules", ".reference"]
+  "ignorePatterns": ["dist", "node_modules", ".reference"],
+  "overrides": [
+    {
+      "files": ["test/**"],
+      "rules": {
+        "unicorn/consistent-function-scoping": "off"
+      }
+    }
+  ]
 }

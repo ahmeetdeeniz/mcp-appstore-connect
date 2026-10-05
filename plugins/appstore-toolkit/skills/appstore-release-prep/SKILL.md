@@ -23,14 +23,24 @@ python3 ${CLAUDE_SKILL_DIR}/scripts/audit_release.py --repo <repo>   # add --jso
 It reports: the shipping version and the last documented one, the release boundary
 commit and everything since it, commits that shipped in the _last_ release but were
 never announced, every store field measured against Apple's limit, em dashes in
-prose, and screenshot-config drift. It exits non-zero if a field is over or missing,
+prose, screenshot-config drift, and the captions of any cross-platform family images
+(listed for you to check, never judged). It exits non-zero if a field is over or missing,
 so it can gate a release.
 
 The source is auto-detected: a metadata tree wins, else `APPSTORE.md`, `STORES.md`
-and friends. The tree is found from its `.listing.json` wherever that sits, falling
-back to `fastlane/metadata/` or `Listing/`; pass `--metadata-root <path>` for a tree
-that was moved and has no sidecar, or when the repo holds more than one. Pass `--fields-file <path>`
+and friends. Trees are found from every `.listing.json`, plus `fastlane/metadata/` or
+`Listing/` at `--repo` and beside the Xcode project, and a root holding platform folders
+(`Listing/macos/` + `Listing/ios/`) is one tree per platform. **Every tree is audited
+and gates the exit code**, each labelled with its platform. `--repo` can be a monorepo
+root: the app directory is found from its `.xcodeproj`, its CHANGELOG is looked for there
+first, and commits that touch only a sibling app (`apps/website`) are left out of the news.
+Pass `--metadata-root <path>` for a tree that was moved and has no sidecar, or to audit
+one tree only. Pass `--fields-file <path>`
 to force a document, or `--locale` to audit a locale other than the primary one.
+
+Only a dated heading is a release. `## [1.0.0] - Unreleased` is the entry being written:
+the audit says so, and since nothing has shipped it lists the commits made since the
+CHANGELOG was last edited, which are the ones that entry cannot mention yet.
 **Check the source it reports** — the header says which file or directory the numbers
 came from.
 If it reports "file does not exist" for a project that plainly has store copy, you
@@ -189,6 +199,15 @@ optional, and a **first** version must not carry release notes at all (Apple rej
 What's New on 1.0). The audit distinguishes these: `MISSING` gates the release, `unset` is
 just telling you the field is empty.
 
+**"First" is per platform, and the changelog cannot see that.** One repo ships a Mac and
+an iOS build from one target and one `CHANGELOG.md`, so the first _iOS_ version can be
+1.8.1 with fourteen entries above it. The audit reads the changelog, finds a previous
+release, and gates on a `MISSING WHAT'S NEW` that Apple will not accept if you write it.
+Pass `--first-release` for that tree. Nothing offline can tell the two cases apart — the
+sidecar records the platform but not whether the platform has shipped before — so this
+one is yours to assert. `app_store_connect_list_versions --platform IOS` settles it: one
+version and no `READY_FOR_SALE` among them means it is the first.
+
 In a metadata tree, each field is its own file under `<root>/<locale>/` (the audit
 header tells you the root; `fastlane/metadata/` or `Listing/` by default):
 `release_notes.txt` (What's New), `promotional_text.txt`, `description.txt`,
@@ -242,6 +261,49 @@ full recapture plus a re-upload of a screenshot set that was already complete. T
 check exists to catch machine-sounding _prose_ — description, release notes, promo
 text, subtitle. Hold that line there.
 
+**What is worth checking in the screenshot config is whether the app can reach what the
+picture shows.** This is content, not voice, and no exemption covers it. A staging
+harness drives the app by setting view state directly rather than by tapping through it,
+so it will cheerfully photograph a screen whose only entry point is behind an
+`#if os(macOS)` — and the store page then sells a feature that platform does not have.
+That is a review risk and a refund risk, and it is invisible in the config, in the
+goldens and in the diff, because the capture is real. It bites hardest when one app
+ships two platforms from one target and the screenshot configs were cloned from each
+other.
+
+So when a repo has more than one screenshot config, take each screen id and find the
+thing that _opens_ it — the toolbar item, the menu entry, the context-menu button — and
+check that it is not compiled out on that platform. Grep the entry point, not the sheet:
+the sheet is usually cross-platform and still present in the binary as dead code, so
+`strings` on the artifact proves nothing either way. Driving the built app in a simulator
+is the check that actually settles it: through Xcode's MCP, launch without the staging
+arguments and tap from the first screen to the entry point, reading each step's
+accessibility hierarchy rather than the thumbnail. The appshot skill's iOS reference
+(_Looking at one stage_) has the session setup.
+
+**A family image restates the listing's cross-device promises in six words, and those
+drift first.** A target shipping Mac and iOS may have a `Screenshots/family.config.json`
+(appshot `compose family`): one image with the app on a Mac and an iPhone, captioned with
+exactly the claims the description makes at length: what syncs, what Pro covers, which
+devices. The audit lists those captions under FAMILY IMAGES, per locale. It judges nothing,
+because a caption paraphrases rather than quotes. So read each against this release's
+description. The failure is a description edit that narrows a promise (sync moving behind
+Pro, a device dropped) while the image still makes the old one. Measured on Balise: the
+description said the library reaches the iPhone "with Pro", and a caption written without
+reading it said it simply syncs.
+
+**An app preview is cut from the same captures, and goes stale with them.** A screenshot
+config with a `videos[]` entry (appshot `compose video`) renders App Store previews
+(`outputs.preview`) and promos, usually `--from-stills`: from the very captures the
+screenshots come from, with a hook and captions on top. Both checks above carry over. A UI
+change that makes the screenshots stale makes the preview stale too, and nothing on the
+store will say so. And the hook and captions are short claims like a family caption, so
+read them against this release's description. The audit lists each video's hook,
+captions and card under VIDEOS, and flags a render older than the latest capture of a
+screen it shows; it reads file times next to the config, so a fresh clone with no render
+says "not rendered here" instead. The `appshot-video` skill covers re-rendering one and
+reviewing it from its contact sheet without watching it.
+
 Also keep hardcoded prices out of copy where you can — a `$4.99` in the description is
 wrong in most storefronts.
 
@@ -259,10 +321,19 @@ when to push. If you exported a metadata tree, remind them the tree and
 If the project generates its screenshots from a config, that config — not the doc —
 is the source of truth for the taglines baked into the images. Changing a tagline
 there means the PNGs are now stale; **say so**, since regenerating them is a separate
-step the user has to run. The `xcode-screenshot-pipeline` skill covers actually
+step the user has to run. The `appshot-screenshot-pipeline` skill covers actually
 regenerating them, and `app_store_connect_list_screenshot_sets` will tell you whether the
 version has a complete set — an incomplete one blocks submission, and nothing in this
-audit can see it.
+audit can see it. A family image marked `[Mac listing slot]` is not in the Mac set's
+`appstore/` directory: it is written to `Screenshots/family/[<locale>/]` and uploaded to
+the Mac set by hand, so a regenerated one is stale on the store until someone does that.
+Say so when its caption changed.
+
+An app preview is a separate upload too. `app_store_connect_list_preview_sets` shows what a
+version's localization carries, and a re-rendered preview reaches the store only through
+`app_store_connect_upload_preview` (up to three per display size and locale, 15 to 30 s
+each). Previews are optional, so a missing one never blocks submission; say when one was
+re-rendered and still needs that upload, and upload it only when the user asks.
 
 Do not bump versions, commit, tag, or submit **on your own initiative**. This skill
 writes documents; shipping is the user's call. When they do ask you to ship it, section 7
@@ -300,6 +371,40 @@ strings "$BIN" | grep -c 'Unlock Pro'   # the new string is in
 strings "$BIN" | grep '4\.99'           # the old one is gone (expect no output)
 ```
 
+### If the app syncs with CloudKit, deploy the schema before archiving
+
+**A new SwiftData/Core Data field does not reach Production on its own.**
+`NSPersistentCloudKitContainer` creates record types and fields in the **Development**
+environment only — it has no ability to alter Production and it does not report that it
+did nothing. Ship a build using a field that Production has never heard of and the app
+saves it locally, syncs every other field, and drops that one silently. Nothing surfaces
+to the user: the record arrives on the second device with the attribute at its default.
+
+This bites on the first model change _after_ the first ship, because a TestFlight build is
+what creates Production in the first place. Before archiving:
+
+1. Run a **Debug** build once, so a client actually writes the field and it appears in the
+   Console. There is nothing to deploy until one has.
+2. CloudKit Console ▸ the container ▸ **Deploy Schema Changes**, Development → Production.
+
+Production is additive-only, forever: a new record type or a new optional/defaulted
+attribute is fine, removing or renaming or retyping one is not — a rename is an add plus a
+dead field. So every added attribute needs a default that means "as it was before", which
+is also what makes old clients safe. They ignore a field they have never heard of, and
+records they write arrive with it absent and pick up that default.
+
+The Console is not the only way to do step 2. `@mgcrea/mcp-cloudkit` — a separate server
+from this one, with its own token, because CloudKit's schema API has nothing to do with
+App Store Connect's — covers the same ground scriptably: `cloudkit_list_record_types`
+confirms a field actually reached Development, `cloudkit_diff_schema` shows what deploying
+would change, and `cloudkit_deploy_schema` fetches that diff before promoting it, which is
+the Console's safety property carried through rather than skipped. Reach for the Console
+when it is a one-off; reach for the server when this needs to happen unattended or you want
+the diff in a transcript.
+
+Grep the diff for `@Model` / `NSManagedObject` changes since the last shipped tag before
+deciding this does not apply.
+
 ### Credentials
 
 An ASC API key is usually already on the machine, in one of two places:
@@ -331,6 +436,18 @@ xcrun altool --upload-app  -f build/export/App.pkg -t macos \
   --apiKey <KEY_ID> --apiIssuer <ISSUER_ID>
 ```
 
+**Those are the macOS incantations, and every one of them changes for iOS**: the
+destination is `generic/platform=iOS`, the artifact is a `.ipa` rather than a `.pkg`, and
+`altool` wants `-t ios`. A universal app ships _two_ builds from one source tree, and they
+are separate uploads, separate `processingState`s and separate versions on App Store
+Connect. Give them their own archive paths — one `-archivePath` used twice silently
+overwrites the first archive with the second.
+
+Check the repo first, though. A project that already ships both platforms usually has
+this wired: `make export-mac` / `make export-ios`, or a `Scripts/` helper. Use it rather
+than retyping the commands, because it already knows the export options plist, the
+derived-data split and the artifact names.
+
 `exportOptions.plist` needs `method = app-store-connect` (older Xcode called it
 `app-store`), the `teamID`, and `manageAppVersionAndBuildNumber = false` — leave that true
 and Xcode silently renumbers the build out from under you.
@@ -350,8 +467,10 @@ app_store_connect_submit_version_for_review { versionId, dryRun: true, confirm: 
 app_store_connect_submit_version_for_review { versionId, confirm: true }
 ```
 
-The version must be `PREPARE_FOR_SUBMISSION` or `DEVELOPER_REJECTED`, and the build must
-be `VALID`, unexpired, and carry the same version string. Everything Apple requires —
+The version must be `PREPARE_FOR_SUBMISSION`, or back after a rejection: `DEVELOPER_REJECTED`
+(you withdrew it), `REJECTED` or `METADATA_REJECTED` (App Review sent it back) or
+`INVALID_BINARY`. After an App Review rejection, swap the build with `set_version_build`
+and resubmit; there is no need to create a new version. The build must be `VALID`, unexpired, and carry the same version string. Everything Apple requires —
 screenshots, age rating, export compliance, review details — must already be in place, and
 **`dryRun` is how you find out what is not.** Apple only adjudicates readiness when the
 version is added to a submission, so the dry run goes that far and stops before handing
@@ -367,9 +486,29 @@ preflight says rebuild first, `app_store_connect_remove_version_from_submission`
 back to `PREPARE_FOR_SUBMISSION`; `cancel_review_submission` cannot do it, because the
 draft has never been with Apple.
 
-Approval is not release. A version created with `releaseType: MANUAL` sits in
-`PENDING_DEVELOPER_RELEASE` until someone releases it, which is usually what you want:
-it keeps the release moment under the user's control.
+**Create versions with `releaseType: AFTER_APPROVAL` unless the user asks to hold the
+release.** Apple then ships the version the moment review passes, and nothing waits on a
+button someone has to remember to press:
+
+```
+app_store_connect_create_version { appId, versionString, platform, releaseType: "AFTER_APPROVAL" }
+app_store_connect_update_version { versionId, releaseType: "AFTER_APPROVAL" }
+```
+
+`create_version` already defaults to `AFTER_APPROVAL` when the field is omitted, so what
+actually produces a `MANUAL` version is something setting it explicitly — a `Scripts/`
+release helper, a fastlane lane, or an older habit. Check that path when versions keep
+landing in `PENDING_DEVELOPER_RELEASE`. An existing version can be flipped with
+`update_version` while it is still `PREPARE_FOR_SUBMISSION`.
+
+Reach for `MANUAL` only when the release moment is itself the point: a launch tied to an
+announcement, or a coordinated push across several apps. For a dated launch prefer
+`SCHEDULED` with an `earliestReleaseDate`, which expresses the intent without depending on
+anyone being at a keyboard.
+
+Approval is not release for those. A `MANUAL` version sits in `PENDING_DEVELOPER_RELEASE`
+until someone releases it, and versions parked there are easy to forget across several
+apps — which is why it is no longer the default.
 
 ### Release
 
@@ -382,10 +521,11 @@ Only for a version already in `PENDING_DEVELOPER_RELEASE` — `AFTER_APPROVAL` a
 `READY_FOR_SALE` a moment after the request, so re-read it with `list_versions` rather than
 trusting the response.
 
-**Ask before releasing, every time.** The whole point of `MANUAL` is that a human picks the
-moment, so a release the user did not ask for in this turn overrides the choice they already
-made. It is also effectively irreversible: pulling a released version means removing the app
-from sale.
+**Ask before pressing release, every time.** A version only sits in
+`PENDING_DEVELOPER_RELEASE` because someone chose `MANUAL` for it, so releasing it without
+being asked in this turn overrides that choice. It is also effectively irreversible:
+pulling a released version means removing the app from sale. This step stays manual even
+though `AFTER_APPROVAL` is the default everywhere else.
 
 ### Submitting from a dirty tree
 

@@ -4,6 +4,7 @@ import { z } from "zod";
 import type { AppStoreConnectClient } from "#/client/asc";
 import type { Contact } from "#/config";
 import { isConfigured, type Config } from "#/config";
+import { registerAnalyticsTools } from "#/tools/analytics";
 import { registerAppEventTools } from "#/tools/appevents";
 import { registerAppInfoTools } from "#/tools/appinfos";
 import { registerAppTools } from "#/tools/apps";
@@ -21,6 +22,8 @@ import { registerIapTools } from "#/tools/iap";
 import { registerListingTools } from "#/tools/listing";
 import { registerMarketingAssetTools } from "#/tools/marketingassets";
 import { registerOperatorTools } from "#/tools/operator";
+import { registerPortfolioTools } from "#/tools/portfolio";
+import { registerPreviewTools } from "#/tools/previews";
 import { registerPricingTools } from "#/tools/pricing";
 import { registerRawTools } from "#/tools/raw";
 import { registerReleaseDoctorTools } from "#/tools/releasedoctor";
@@ -65,13 +68,19 @@ type LegacyToolHandler = (...args: any[]) => any;
  * Keep the extension modules source-compatible during the upstream migration by adapting
  * only their registration boundary. Upstream-native tools continue to receive the real server.
  */
+// Modules merged from upstream already pass a real z.object; only raw shapes need wrapping.
+const isZodSchema = (value: unknown): boolean =>
+  typeof (value as { safeParse?: unknown } | undefined)?.safeParse === "function";
+
 const legacyRegistrationServer = (server: McpServer): any => ({
   registerTool: (name: string, options: LegacyToolOptions, handler: LegacyToolHandler) =>
     server.registerTool(
       name,
       {
         ...options,
-        inputSchema: z.object((options.inputSchema ?? {}) as z.ZodRawShape),
+        inputSchema: isZodSchema(options.inputSchema)
+          ? options.inputSchema
+          : z.object((options.inputSchema ?? {}) as z.ZodRawShape),
       } as any,
       handler as any,
     ),
@@ -105,6 +114,10 @@ export const registerTools = (
   // Upstream-native v2 tools.
   registerAppTools(server, client, allowWrites);
   registerVersionTools(server, client, allowWrites);
+  // Registered next to the version tools, because the question it answers —
+  // which binary each app ships today — is the one people reach for
+  // list_versions and list_builds to answer, and get wrong.
+  registerPortfolioTools(server, client, allowWrites);
   registerSubmissionTools(server, client, allowWrites);
   registerAppInfoTools(server, client, allowWrites);
   registerCategoryTools(server, client, allowWrites);
@@ -113,8 +126,11 @@ export const registerTools = (
   registerIapTools(server, client, allowWrites);
   registerListingTools(server, client, ctx);
   registerScreenshotTools(server, client, allowWrites);
+  registerPreviewTools(server, client, allowWrites);
   registerBuildTools(server, client, allowWrites);
   registerReportTools(server, client, ctx);
+  registerAnalyticsTools(server, client, ctx);
+  registerCustomerReviewTools(server, client, allowWrites);
   registerUserTools(server, client, allowWrites);
   registerBundleIdTools(server, client, allowWrites);
   registerDeviceTools(server, client, allowWrites);
@@ -132,6 +148,5 @@ export const registerTools = (
   registerTestflightTools(legacyServer, client, allowWrites);
   registerXcodeCloudTools(legacyServer, client, allowWrites);
   registerWebhookTools(legacyServer, client, allowWrites);
-  registerCustomerReviewTools(legacyServer, client, allowWrites);
   registerRawTools(legacyServer, client, allowWrites);
 };

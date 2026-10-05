@@ -86,7 +86,11 @@ the app's evergreen pitch; that is the description's job.
 ## Review-risk notes
 
 - Don't name competitors in any field (see keywords above).
-- Don't reference other platforms ("also on Android") — a common rejection.
+- Don't reference other platforms ("also on Android") — a common rejection (2.3.10).
+  Apple's own devices are not "other platforms": "on your Mac, iPhone and iPad" is fine
+  in copy, and a Mac listing screenshot may show the iPhone app beside the Mac window,
+  as long as the Mac app is the main subject and the iPhone shows real UI of the same
+  product (2.3.3). That is what an appshot family image marked `"store": "mac"` checks.
 - Don't mention prices in the description if they vary by storefront; a hardcoded
   "$4.99" is wrong for most of the world. Let StoreKit render the localized price
   in-app, and keep the number out of copy where you can.

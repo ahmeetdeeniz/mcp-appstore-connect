@@ -50,7 +50,7 @@ Both trace back to the exact commit and CI run that produced them. The commands 
 
 **The `.p8` never leaves your machine, and never goes over the wire.** Tokens are minted locally: the server signs short-lived ES256 JWTs (20-minute cap, re-signed just before expiry) using Node's built-in `node:crypto`. There is no `jsonwebtoken` or `jose` in the signing path — one less dependency between your private key and the network. Under Docker the key is mounted read-only and is never baked into the image.
 
-**The server never writes to your disk.** `export_listing` hands back `{path, content}` pairs and your agent writes them, so every file write stays under your own MCP client's permission prompt rather than happening invisibly inside the server.
+**The server writes to disk only where you explicitly point it.** There is no path it picks for itself and no cache: a file is written when, and only when, you pass a `savePath`, and that path must be absolute — a relative one is refused rather than resolved against whatever directory the server happens to be running in. `export_listing` is deliberately not part of that: it hands back `{path, content}` pairs for your agent to write, so applying a listing stays under your own MCP client's permission prompt.
 
 ### Blast radius
 
@@ -204,7 +204,9 @@ npx @modelcontextprotocol/inspector npx -y @mgcrea/mcp-appstore-connect
 
 ## Tools
 
-**Apps** — `list_apps`, `get_app`, _`update_app`_\* — `update_app` carries `contentRightsDeclaration`, one of the gates below.
+**Apps** — `list_apps`, `get_app`, _`update_app`_\* — `update_app` carries `contentRightsDeclaration`, one of the gates below. Neither read says which binary an app ships: pass `includeLiveVersion` to `get_app`, or use `list_live_versions` for the whole account.
+
+**Portfolio** — `list_live_versions` — for every app on the account (or a subset), the version customers can download **right now** and the binary it ships: build number, `minOsVersion`, `uploadedDate`. One call and `1 + N` requests, against `list_versions` → `get_version` per app. **Apple never moves a superseded version out of `READY_FOR_SALE`** — every version an app has ever shipped keeps that state forever, so filtering on it returns the whole release history with nothing marking which one is current (one Mac app answered with eleven, the oldest declaring `minOsVersion` 15.5 against a current 26.0). `live` holds the newest per platform; the rest are counted in `supersededVersions`. The live build is the one _attached_ to the `READY_FOR_SALE` version, which is usually **not** the newest `VALID` build — that one is a TestFlight or in-review binary, and reading an OS floor off it is wrong in the direction that looks right. Apps that fail are reported in `errors` and named in `note` rather than dropped, and an app with nothing live keeps its row with `live: []`. `list_builds`, `list_beta_groups` and `list_review_submissions` also take an array of app ids, since Apple serves those three in one request; every row carries the `appId` it belongs to.
 
 **Submission prerequisites** — what a **first** submission trips over. None of these lives on the version, so nothing in the version's own state hints at them, and `submit_version_for_review` fails with one error per missing item and no id to chase. Each is set once and outlives every release:
 
@@ -255,7 +257,7 @@ A **free** app still needs a price: "free" is a price point, not the absence of 
 
 **Versions & metadata** — `list_versions`, `get_version` (resolves the attached build — which binary the version would actually ship, and when it was uploaded), `list_version_localizations`, `get_version_localization`, _`create_version`_\*, _`update_version`_\* (release type — auto on approval, manual, or scheduled), _`update_version_localization`_\* (description, keywords, what's-new, promo text)
 
-**Review submissions** — `list_review_submissions`, _`submit_version_for_review`_\*†, _`cancel_review_submission`_\*†, _`remove_version_from_submission`_\*† — hand a finished version to Apple for review, withdraw one already with Apple, or take a version back off an un-submitted draft so its build can be changed again
+**Review submissions** — `list_review_submissions`, _`submit_version_for_review`_\*†, _`cancel_review_submission`_\*†, _`remove_version_from_submission`_\*† — hand a finished version to Apple for review, withdraw one already with Apple, or take a version back off an un-submitted draft so its build can be changed again. Each submission lists its `items`; on a rejected (`UNRESOLVED_ISSUES`) one, each item also names what it is — the version, an in-app purchase, a subscription — so the `REJECTED` item is identifiable. Apple's rejection message itself is not in the API; read it in App Store Connect.
 
 **Release** — _`release_version`_\*† — release an approved version sitting in `PENDING_DEVELOPER_RELEASE` (the manual "Release This Version" button)
 
@@ -265,29 +267,44 @@ A **free** app still needs a price: "free" is a price point, not the absence of 
 
 **In-app purchases** — `list_in_app_purchases`, `get_in_app_purchase`, `list_iap_price_points`, `get_iap_price_schedule`, _`set_in_app_purchase_price`_\*†, _`update_in_app_purchase`_\* — read the price-point catalogue for a territory, then price the IAP against one. `update_in_app_purchase` carries the reference name, the review note and `familySharable`. One-time purchases only; auto-renewable subscriptions are not covered.
 
-**In-app purchase metadata** — `list_iap_localizations`, `get_iap_review_screenshot`, `get_iap_availability`, _`create_iap_localization`_\*, _`update_iap_localization`_\*, _`delete_iap_localization`_\*†, _`upload_iap_review_screenshot`_\*†, _`set_iap_availability`_\*, _`submit_in_app_purchase_for_review`_\*† — an IAP sits at `MISSING_METADATA`, and cannot be submitted, until **four** things exist: a per-locale display name, a description, a review screenshot, and territory availability. Availability is the one people miss, because the App Store Connect UI fills it in silently and the API does not — `set_iap_availability` defaults to every territory Apple offers. These are the customer-facing strings on the purchase sheet, not the app's own listing, and the limits are much tighter — **30** characters for the name and **45** for the description, checked locally because Apple answers an over-length value with a 409 that names neither the field nor the limit. `submit_in_app_purchase_for_review` refuses anything not already `READY_TO_SUBMIT` rather than forwarding a rejection.
+**In-app purchase metadata** — `list_iap_localizations`, `get_iap_review_screenshot`, `get_iap_availability`, _`create_iap_localization`_\*, _`update_iap_localization`_\*, _`delete_iap_localization`_\*†, _`upload_iap_review_screenshot`_\*†, _`delete_iap_review_screenshot`_\*†, _`set_iap_availability`_\*, _`submit_in_app_purchase_for_review`_\*† — an IAP sits at `MISSING_METADATA`, and cannot be submitted, until **four** things exist: a per-locale display name, a description, a review screenshot, and territory availability. Availability is the one people miss, because the App Store Connect UI fills it in silently and the API does not — `set_iap_availability` defaults to every territory Apple offers. These are the customer-facing strings on the purchase sheet, not the app's own listing, and the limits are much tighter — **30** characters for the name and **45** for the description, checked locally because Apple answers an over-length value with a 409 that names neither the field nor the limit. `submit_in_app_purchase_for_review` refuses anything not already `READY_TO_SUBMIT` rather than forwarding a rejection.
 
 **Screenshots** — `list_screenshot_sets`, `list_screenshots`, `get_screenshot`, _`upload_screenshot`_\*, _`delete_screenshot`_\*†, _`delete_screenshot_set`_\*†, _`reorder_screenshots`_\*†
 
-**Builds** — `list_builds`
+**App previews** — `list_preview_sets`, `list_previews`, `get_preview`, _`upload_preview`_\*, _`set_preview_poster_frame`_\*, _`delete_preview`_\*†, _`delete_preview_set`_\*†, _`reorder_previews`_\*† — the videos that autoplay above the screenshots. Same set-per-device model, but `previewType` drops the `APP_` prefix (`IPHONE_67`, `DESKTOP`, …) and Watch and iMessage take none.
+
+**Builds** — `list_builds` — every binary uploaded for an app, with its `minOsVersion`. **`VALID` means Apple finished processing it, not that it is on the App Store.** The newest `VALID` build is normally a TestFlight or in-review binary, so an OS floor or deployment target read off it is wrong in the direction that looks right — it describes what you are about to ship, not what customers are running. The live binary is the one _attached_ to the `READY_FOR_SALE` version, often several builds older; `get_version` resolves it.
 
 **TestFlight** — `list_beta_groups`, `list_beta_testers`, `list_beta_feedback`, _`create_beta_group`_\*, _`invite_beta_tester`_\*, _`add_tester_to_group`_\*, _`remove_tester_from_group`_\*† — an app with no group has nowhere to send a build, so `create_beta_group` is the first step of setting TestFlight up; every other tool here needs the group id it returns. Internal groups take testers who are already Users on the account and skip Beta App Review, so `hasAccessToAllBuilds` is the quickest way to make builds you have already uploaded installable.
 
 **Sales & finance reports** — `get_vendor_number`, `download_sales_report`, `download_finance_report` — the Sales and Trends TSVs: units, proceeds, installs by territory and install type. Needs a vendor number; `get_vendor_number` reports the configured one, which layer it came from, and whether Apple accepts it. The sales report is account-wide and Apple offers no per-app filter, so pass `appleIdentifier` or `sku` to have the server apply one after download — it runs before `maxLines`, so truncation counts the app you asked about rather than an arbitrary slice of the portfolio, and the dropped row count comes back with it. **An in-app purchase row does not carry its app's Apple Identifier** — it carries the IAP's own, and names the app only in `Parent Identifier`, as the SKU. Filtering on the app id alone therefore returns a clean, plausible report showing no in-app revenue at all, so the server matches those rows through `Parent Identifier` too and says how many it found; `includeInAppPurchases: false` opts out and reports what that cost. **`download_finance_report` takes a _fiscal_ period, not a calendar one:** Apple's fiscal year opens in late September and its months are 4-4-5 weeks, so `2026-07` is fiscal month 7 of FY2026 — roughly late March to early May. Getting this wrong is silent, because a well-formed report comes back either way, so the response carries a `coverage` block with the start and end dates the report actually covers. Check it before quoting any figure.
 
-**Analytics** — `get_analytics_status`, `list_analytics_report_requests`, `list_analytics_reports`, `list_analytics_report_instances`, `list_analytics_report_segments`, `download_analytics_report_segment`, _`create_analytics_report_request`_\* — App Analytics proper: impressions, product page views, conversion rate, installs, deletions, sessions, retention. `get_analytics_status` walks the whole chain in one call and answers "is there any data yet, and how far back does it go" — reach for it before the four-step walk, especially just after enabling analytics, since reports exist as soon as Apple registers them but hold nothing until instances appear a day or two later. See [Reading analytics](#reading-analytics).
+**Analytics** — `get_analytics_report`, `get_analytics_status`, `list_analytics_report_requests`, `list_analytics_reports`, `list_analytics_report_instances`, `list_analytics_report_segments`, `download_analytics_report_segment`, _`create_analytics_report_request`_\* — App Analytics proper: impressions, product page views, conversion rate, installs, deletions, sessions, retention. `get_analytics_report` walks the whole chain and returns the numbers, picking the report and instance itself and saying which in `selection`; its `coverage` block is read from the data's own `Date` column, because an instance's `processingDate` is when Apple _generated_ it and says nothing about what is inside. `get_analytics_status` answers the cheaper question "is there any data yet, and how far back does it go" — reach for it just after enabling analytics, since reports exist as soon as Apple registers them but hold nothing until instances appear a day or two later. See [Reading analytics](#reading-analytics).
 
-**Customer reviews** — `list_customer_reviews` — star rating, title, body, territory and date, newest first; filter by rating to read just the complaints. These are **written** reviews only. Most people rate without writing, and Apple exposes no aggregate star average here, so a distribution computed from these is directional — it is not the App Store rating.
+**Customer reviews** — `list_customer_reviews`, _`reply_to_customer_review`_\*†, _`delete_customer_review_response`_\*† — star rating, title, body, territory and date, newest first, with your published reply inline as `response`; filter by rating to read just the complaints. Replying to an answered review **overwrites** the existing reply, which is returned as `replaced`. These are **written** reviews only. Most people rate without writing, and Apple exposes no aggregate star average here, so a distribution computed from these is directional — it is not the App Store rating.
 
 **Users** — `list_users`
 
-**Bundle IDs** — `list_bundle_ids`, `get_bundle_id`, _`create_bundle_id`_\*, _`enable_capability`_\*, _`disable_capability`_\*†
+**Bundle IDs** — `list_bundle_ids`, `get_bundle_id`, `list_capabilities`, _`create_bundle_id`_\*†, _`enable_capability`_\*, _`disable_capability`_\*† — **only the capabilities that predate the App Services page can be enabled through the API.** Apple's `capabilityType` enum never grew past them, so WeatherKit, Family Controls, Group Activities and everything newer answer a 409 that lists the values it does take and says nothing about where the rest live — which reads as a misspelling rather than as impossible. `enable_capability` names the portal page to tick instead. The read side is not restricted: `list_capabilities` reports a portal-ticked capability like `WEATHERKIT` normally, so a manual step can still be verified from here, and it is where `disable_capability`'s capability id comes from.
 
-**Devices** — `list_devices`, _`register_device`_\*
+**Devices** — `list_devices`, _`register_device`_\*†
+
+**Every list read says when its page is a subset.** Apple caps `data` at `limit` and puts the real count in `meta.paging.total`, and nothing in the rows themselves says they are partial — so a full page reads as the whole collection, and something that fell off the end reads as absent. A partial response carries an `incomplete` block with `returned`, `total` and `missing`. Its absence is the claim that the list is complete.
 
 _Italic\*_ tools are writes, hidden unless `APP_STORE_CONNECT_ALLOW_WRITES=1`. † additionally requires `confirm: true`.
 
 Tool names are prefixed `app_store_connect_` (omitted above for brevity).
+
+### Response field deprecations
+
+| Field                         | Replaced by       | Status                                                                                                                                            |
+| ----------------------------- | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `rows` (report envelope)      | `lines`           | **Removed in 0.23.** Header-inclusive, while `dataRows` is not — two counts one apart is a transcription trap, and `lines` matches `saved.lines`. |
+| `note` (report envelope)      | `inlineNote`      | **Removed in 0.23.**                                                                                                                              |
+| `savedTo` (certificate tools) | `saved.path`      | Deprecated, removed in 0.24.                                                                                                                      |
+| `truncated` (report envelope) | `inlineTruncated` | **Kept indefinitely.**                                                                                                                            |
+
+`truncated` is the deliberate exception. Losing `rows`, `note` or `savedTo` fails loudly — a `KeyError`, an `undefined`, a failed assertion. Losing `truncated` fails _silently_ in the one direction that costs money: a reader that refuses to total a partial report sees `undefined`, treats it as false, and publishes a floor as a total. So it stays, with exactly its old value.
 
 A Claude Code skill that drives these tools through a full release ships alongside the server —
 see [Release-prep plugin](#release-prep-plugin).
@@ -323,11 +340,13 @@ fastlane path is the default only because it's the one other tools already read.
 
 The server writes to disk only where you point it. `export_listing` hands back
 `{path, content}` pairs and your agent writes them, so listing writes stay under your own
-permission prompt. The three report downloads take an optional `savePath`, because the
-alternative — retyping a TSV out of a tool result — loses rows silently, and a report
-missing a row still totals to a plausible number. A saved file always holds the report in
-full; `maxLines` then only trims the copy inlined in the response. Under Docker the path
-must resolve inside the container, so mount the folder and pass the container path.
+permission prompt. **Every read tool takes an optional `savePath`**, because the
+alternative — an agent retyping values out of a tool result — loses them silently, and a
+report missing a row still totals to a plausible number. The three report downloads write
+the raw TSV/CSV and `download_certificate` writes DER bytes; every other read writes its
+JSON result, pretty-printed. A saved report always holds the file in full; `maxLines` then
+only trims the copy inlined in the response. Under Docker the path must resolve inside the
+container, so mount the folder and pass the container path.
 
 Editing and pushing back:
 
@@ -368,10 +387,21 @@ analyticsReportRequest   one per app, created once, then reused forever
             └─ segment   the gzipped CSV that holds the rows
 ```
 
-`get_analytics_status` collapses the whole walk into one call — request, report and instance
-counts plus the earliest instance date — and is the right first move when the question is
-simply whether there is any data yet. The four hops below are for reaching the numbers
-themselves.
+Two tools collapse that walk, and between them cover almost every question:
+
+- **`get_analytics_report`** goes all the way to the numbers in one call. It picks the
+  report and instance itself and reports both in `selection`, alongside the alternatives it
+  passed over, and returns `coverage` read from the data's own `Date` column — the only
+  honest answer to which period you actually got, since an instance's `processingDate` is
+  when Apple _generated_ it and a fresh snapshot reports today while holding a year of
+  history. It downloads every segment by default and checks their total compressed size
+  before fetching anything. It will not create the report request: that is a write, and
+  creating only `ONGOING` forfeits the app's history permanently.
+- **`get_analytics_status`** answers "is there any data yet" — request, report and instance
+  counts plus the earliest instance date — and is the right first move just after enabling
+  analytics.
+
+The four hops below remain for anything those two do not cover.
 
 One tool per hop, in order:
 
@@ -444,7 +474,8 @@ missing, so it can gate a release from CI.
 - **Finance reports are keyed by fiscal month, not calendar month.** Apple's fiscal year opens in late September and its months run 4-4-5 weeks, so `reportDate: "2026-07"` returns fiscal month 7 of FY2026 — roughly 29 March to 2 May 2026. Nothing rejects a calendar month, because every well-formed period is a valid request, so the mistake surfaces as a plausible report for a period you did not choose. `download_finance_report` returns a `coverage` block with the real start and end dates read out of the report body; read it before quoting a number. Sales reports are unaffected — those are keyed by ordinary calendar dates.
 - **Analytics is asynchronous and nested.** Create the report request once, wait a day or two for Apple to generate it, then walk request → report → instance → segment to reach the rows — or call `get_analytics_status` to check whether there is anything to walk. See [Reading analytics](#reading-analytics).
 - **`upload_screenshot` reads the file server-side.** Pass an absolute `filePath` the server can reach. Under Docker that means a path _inside_ the container — mount the folder (`-v /host/screenshots:/screenshots`) and pass the container path, or send small images inline as base64 via `fileData`.
-- **Screenshots validate after upload.** Apple checks pixel dimensions asynchronously, so a wrongly-sized image fails during processing rather than at upload; the tool waits (`waitSeconds`, default 60) and reports Apple's exact reason. Timing out is not a failure — the upload already succeeded, so poll `get_screenshot` instead of retrying. The version must be editable (`PREPARE_FOR_SUBMISSION` or `DEVELOPER_REJECTED`), and a set holds at most 10 screenshots.
+- **Screenshots validate after upload.** Apple checks pixel dimensions asynchronously, so a wrongly-sized image fails during processing rather than at upload; the tool waits (`waitSeconds`, default 60) and reports Apple's exact reason. Timing out is not a failure — the upload already succeeded, so poll `get_screenshot` instead of retrying. The version must be editable (`PREPARE_FOR_SUBMISSION`, or back after a rejection: `DEVELOPER_REJECTED`, `REJECTED`, `METADATA_REJECTED` or `INVALID_BINARY`), and a set holds at most 10 screenshots.
+- **App previews are uploaded the same way, but slower.** `upload_preview` takes a `.mov`, `.m4v` or `.mp4` by absolute `filePath` only (up to 500 MB, so there is no base64 route), and waits on `videoDeliveryState`, which keeps processing for minutes after the bytes land. A timeout is a success to poll with `get_preview`, not a reason to retry. A poster frame (`previewFrameTimeCode`, `HH:MM:SS:FF`) only sticks once processing finishes, so the upload sets it then or tells you to call `set_preview_poster_frame` later. A set holds at most 3 previews.
 - **Screenshot order is explicit.** `reorder_screenshots` replaces a set's full contents, so pass every id you want to keep — an omitted one is removed from the set.
 
 ## Develop

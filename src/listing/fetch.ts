@@ -7,6 +7,7 @@ import {
   type LocaleFields,
   digest,
 } from "#/listing/document";
+import { compareVersions } from "#/versions";
 
 type Rec = Record<string, unknown>;
 
@@ -25,22 +26,6 @@ const attr = (resource: Resource | undefined, key: string): string | undefined =
 
 const relationshipId = (resource: Resource | undefined, key: string): string | undefined =>
   str(resource?.relationships?.[key]?.data?.id);
-
-/**
- * Compare version strings numerically, segment by segment. A lexical sort puts
- * "1.10.0" before "1.9.0", which silently exports the wrong version's copy —
- * the kind of bug you only notice after pushing release notes to the wrong one.
- */
-const compareVersions = (a: string, b: string): number => {
-  const pa = a.split(".");
-  const pb = b.split(".");
-  for (let i = 0; i < Math.max(pa.length, pb.length); i += 1) {
-    const na = Number.parseInt(pa[i] ?? "0", 10) || 0;
-    const nb = Number.parseInt(pb[i] ?? "0", 10) || 0;
-    if (na !== nb) return na - nb;
-  }
-  return 0;
-};
 
 /**
  * Which version "latest" means. Ordered by how much it looks like the version

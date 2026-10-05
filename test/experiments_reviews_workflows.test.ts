@@ -46,7 +46,6 @@ describe("PPO, review and workflow registration", () => {
       "app_store_connect_review_inbox",
       "app_store_connect_list_product_page_experiments",
       "app_store_connect_get_product_page_experiment",
-      "app_store_connect_get_customer_review",
     ]) {
       expect(readNames).toContain(name);
       expect(writeNames).toContain(name);
@@ -56,7 +55,7 @@ describe("PPO, review and workflow registration", () => {
       "app_store_connect_create_product_page_experiment",
       "app_store_connect_create_product_page_treatment",
       "app_store_connect_set_product_page_experiment_running",
-      "app_store_connect_respond_to_customer_review",
+      "app_store_connect_reply_to_customer_review",
       "app_store_connect_delete_customer_review_response",
     ]) {
       expect(readNames).not.toContain(name);

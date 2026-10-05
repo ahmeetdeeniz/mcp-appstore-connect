@@ -3,7 +3,7 @@ import { chmodSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { loadConfig, resolveConfigPath, isConfigured, setupInstructions } from "#/config";
 
@@ -34,9 +34,10 @@ const configFile = (contents: unknown, mode = 0o600): string => {
   return path;
 };
 
-const keyFile = (): string => {
+const keyFile = (mode = 0o600): string => {
   const path = join(tmp(), "AuthKey.p8");
   writeFileSync(path, pem);
+  chmodSync(path, mode);
   return path;
 };
 
@@ -67,6 +68,23 @@ describe("loadConfig", () => {
     };
     expect(loadConfig(env, noConfig).privateKey).toContain("BEGIN PRIVATE KEY");
   });
+
+  it.skipIf(process.platform === "win32")(
+    "warns when the .p8 file is readable by other users",
+    () => {
+      const path = keyFile(0o644);
+      const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+      try {
+        loadConfig(
+          { ...baseEnv(), APP_STORE_CONNECT_P8: undefined, APP_STORE_CONNECT_P8_PATH: path },
+          noConfig,
+        );
+        expect(stderr).toHaveBeenCalledWith(expect.stringContaining(`chmod 600 ${path}`));
+      } finally {
+        stderr.mockRestore();
+      }
+    },
+  );
 
   it("rejects setting both inline and path", () => {
     expect(() =>

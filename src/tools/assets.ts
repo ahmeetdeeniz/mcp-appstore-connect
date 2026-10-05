@@ -1,4 +1,4 @@
-import { readFile } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
 import { basename, isAbsolute } from "node:path";
 
 import type { AppStoreConnectClient } from "#/client/asc";
@@ -12,6 +12,9 @@ import type { AppStoreConnectClient } from "#/client/asc";
 
 /** Apple rejects anything larger well before processing; fail before reserving. */
 export const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
+
+/** Apple's ceiling for an app preview video. */
+export const MAX_VIDEO_BYTES = 500 * 1024 * 1024;
 
 const POLL_INTERVALS_MS = [1000, 2000, 2000, 3000, 5000];
 
@@ -33,30 +36,54 @@ export const idOf = (response: unknown): string | undefined => {
   return typeof response.data.id === "string" ? response.data.id : undefined;
 };
 
+export type ReadAssetOptions = {
+  /** Names the asset in every error, e.g. "review screenshot" or "app preview". */
+  what: string;
+  maxBytes: number;
+  /** Appended to the over-size error: how to bring the file under the limit. */
+  oversizeHint: string;
+  /** Whether the caller may pass the bytes inline as base64 (`fileData`). */
+  inline: boolean;
+};
+
+const assertSize = (bytes: number, opts: ReadAssetOptions): void => {
+  if (bytes > opts.maxBytes) {
+    throw new Error(
+      `The ${opts.what} is ${bytes} bytes, over the ${opts.maxBytes}-byte limit. ` +
+        opts.oversizeHint,
+    );
+  }
+};
+
 /**
- * Resolve the image bytes from either a server-side path or inline base64.
+ * Resolve the asset bytes from either a server-side path or inline base64.
  * `filePath` is the realistic input — a model cannot emit a PNG — but this
  * server also ships as a Docker image, where the host paths a caller would
  * naturally reach for do not resolve inside the container.
- *
- * `what` names the asset in every error, so a failure says "review screenshot"
- * rather than always saying "screenshot" regardless of what was being uploaded.
  */
-export const readImage = async (
+export const readAsset = async (
   filePath: string | undefined,
   fileData: string | undefined,
   fileName: string | undefined,
-  what = "screenshot",
+  opts: ReadAssetOptions,
 ): Promise<{ bytes: Buffer; name: string }> => {
+  const { what } = opts;
+  if (!opts.inline && fileData !== undefined) {
+    throw new Error(`The ${what} cannot be sent inline — pass \`filePath\` instead.`);
+  }
   if ((filePath === undefined) === (fileData === undefined)) {
     throw new Error(
-      "Pass exactly one of `filePath` (a path readable by this server) or `fileData` (base64).",
+      opts.inline
+        ? "Pass exactly one of `filePath` (a path readable by this server) or `fileData` (base64)."
+        : "Pass `filePath`, a path readable by this server.",
     );
   }
 
   const resolved = await (async (): Promise<{ bytes: Buffer; name: string }> => {
     if (fileData !== undefined) {
       if (!fileName) throw new Error("`fileName` is required when passing `fileData`.");
+      // Four base64 characters carry three bytes: refuse before decoding.
+      assertSize(Math.floor((fileData.length * 3) / 4), opts);
       return { bytes: Buffer.from(fileData, "base64"), name: fileName };
     }
 
@@ -67,30 +94,71 @@ export const readImage = async (
           `directory is not necessarily yours.`,
       );
     }
+    const unreadable = (err: unknown): Error => {
+      const code = (err as NodeJS.ErrnoException).code;
+      return new Error(
+        `Could not read the ${what} at ${path} (${code ?? "unknown error"}). If this MCP ` +
+          `server runs in Docker the path must exist INSIDE the container — mount the folder ` +
+          `(docker run -v /host/media:/media …) and pass the container path` +
+          (opts.inline ? `, or send the file as base64 via \`fileData\` instead.` : "."),
+        { cause: err },
+      );
+    };
+    // Sized before it is read, so a path pointed at the wrong, huge file fails
+    // at once instead of after loading it.
+    const size = await stat(path).then(
+      (info) => info.size,
+      (err: unknown) => {
+        throw unreadable(err);
+      },
+    );
+    assertSize(size, opts);
     try {
       return { bytes: await readFile(path), name: fileName ?? basename(path) };
     } catch (err) {
-      const code = (err as NodeJS.ErrnoException).code;
-      throw new Error(
-        `Could not read the ${what} at ${path} (${code ?? "unknown error"}). If this MCP ` +
-          `server runs in Docker the path must exist INSIDE the container — mount the folder ` +
-          `(docker run -v /host/screenshots:/screenshots …) and pass the container path, or ` +
-          `send the image as base64 via \`fileData\` instead.`,
-        { cause: err },
-      );
+      throw unreadable(err);
     }
   })();
 
   if (resolved.bytes.byteLength === 0) {
     throw new Error(`The ${what} is empty (0 bytes): ${filePath ?? resolved.name}.`);
   }
-  if (resolved.bytes.byteLength > MAX_IMAGE_BYTES) {
-    throw new Error(
-      `The ${what} is ${resolved.bytes.byteLength} bytes, over the ${MAX_IMAGE_BYTES}-byte ` +
-        `limit. Export it at the exact required dimensions rather than oversampling.`,
-    );
-  }
+  assertSize(resolved.bytes.byteLength, opts);
   return resolved;
+};
+
+/** An image asset: 10 MB, and accepted inline for a containerized server. */
+export const readImage = async (
+  filePath: string | undefined,
+  fileData: string | undefined,
+  fileName: string | undefined,
+  what = "screenshot",
+): Promise<{ bytes: Buffer; name: string }> =>
+  readAsset(filePath, fileData, fileName, {
+    what,
+    maxBytes: MAX_IMAGE_BYTES,
+    oversizeHint: "Export it at the exact required dimensions rather than oversampling.",
+    inline: true,
+  });
+
+/**
+ * `uploadOperations` is a plain attribute, so the generic summarizer would echo
+ * a wall of long pre-signed URLs back into the model's context. They are spent
+ * by the time anyone reads an asset, so drop them.
+ */
+const withoutUploadOperations = (row: unknown): unknown => {
+  if (!isRecord(row)) return row;
+  const { uploadOperations: _dropped, ...rest } = row;
+  return rest;
+};
+
+export const stripUploadOperations = (summarized: unknown): unknown => {
+  if (!isRecord(summarized) || !("data" in summarized)) return summarized;
+  const { data } = summarized;
+  return {
+    ...summarized,
+    data: Array.isArray(data) ? data.map(withoutUploadOperations) : withoutUploadOperations(data),
+  };
 };
 
 export const describeStateErrors = (state: Rec): string =>
@@ -116,6 +184,16 @@ export type PollOptions = {
   deleteToolName: string;
   /** Named in the timeout note as the way to read the final state. */
   pollToolName: string;
+  /**
+   * Attributes holding the processing state, first present wins. Defaults to
+   * `assetDeliveryState`; a video reports its own `videoDeliveryState`, which
+   * keeps going (PROCESSING) after the asset state already says COMPLETE.
+   */
+  stateAttributes?: string[];
+  /** Attributes echoed back once processing is COMPLETE. Defaults to `imageAsset`. */
+  resultAttributes?: string[];
+  /** What the rejection message calls the asset. Defaults to "image". */
+  what?: string;
 };
 
 /**
@@ -131,8 +209,28 @@ export const pollAssetState = async (
   let tick = 0;
 
   for (;;) {
-    const attrs = attributesOf(await client.get(`${resourcePath}/${assetId}`));
-    const assetState = isRecord(attrs.assetDeliveryState) ? attrs.assetDeliveryState : {};
+    let response: unknown;
+    try {
+      response = await client.get(`${resourcePath}/${assetId}`);
+    } catch (error) {
+      // Same reasoning as the deadline below: the bytes are committed, so a
+      // failed status read must not surface as a failed upload.
+      return {
+        id: assetId,
+        state: "UNKNOWN",
+        stillProcessing: true,
+        ...meta,
+        note:
+          `The upload itself succeeded, but reading its processing state failed ` +
+          `(${error instanceof Error ? error.message : String(error)}). Do not re-upload — ` +
+          `poll ${opts.pollToolName} for the final state.`,
+      };
+    }
+    const attrs = attributesOf(response);
+    const stateKey = (opts.stateAttributes ?? ["assetDeliveryState"]).find((key) =>
+      isRecord(attrs[key]),
+    );
+    const assetState = stateKey && isRecord(attrs[stateKey]) ? attrs[stateKey] : {};
     const state = typeof assetState.state === "string" ? assetState.state : undefined;
 
     if (state === "COMPLETE") {
@@ -140,7 +238,11 @@ export const pollAssetState = async (
         id: assetId,
         state,
         ...meta,
-        ...(attrs.imageAsset !== undefined ? { imageAsset: attrs.imageAsset } : {}),
+        ...Object.fromEntries(
+          (opts.resultAttributes ?? ["imageAsset"])
+            .filter((key) => attrs[key] !== undefined)
+            .map((key) => [key, attrs[key]]),
+        ),
         ...(Array.isArray(assetState.warnings) && assetState.warnings.length > 0
           ? { warnings: assetState.warnings }
           : {}),
@@ -150,7 +252,7 @@ export const pollAssetState = async (
     if (state === "FAILED") {
       const why = describeStateErrors(assetState);
       throw new Error(
-        `App Store Connect rejected the image during processing${why ? `: ${why}` : ""}. ` +
+        `App Store Connect rejected the ${opts.what ?? "image"} during processing${why ? `: ${why}` : ""}. ` +
           `${opts.failureHint} The failed asset ${assetId} still exists — delete it with ` +
           `${opts.deleteToolName} before retrying.`,
       );
